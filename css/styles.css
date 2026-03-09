@@ -32,7 +32,14 @@ body {
   background: var(--bg);
   color: var(--text);
   font: 14px/1.55 "Amazon Ember", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+  opacity: 0;
+  transition: opacity 0.35s ease;
 }
+.splash-screen.hidden {
+  animation: splashFadeOut .25s cubic-bezier(0.4,0,1,1) both;
+  pointer-events: none;
+}
+@keyframes splashFadeOut { from { opacity: 1; } to { opacity: 0; } }
 
 .container { max-width: 580px; margin: 0 auto; padding: 18px 16px; }
 

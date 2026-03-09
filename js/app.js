@@ -42,8 +42,17 @@ function showAuthScreen() {
 function dismissAuthScreen() {
   document.querySelector('header').style.display = '';
   document.querySelector('.container').style.display = '';
+  document.body.style.opacity = '1';
   const splash = document.getElementById('authSplash');
-  if (splash) splash.remove();
+  if (splash) {
+    const screen = splash.querySelector('.splash-screen');
+    if (screen) {
+      screen.classList.add('hidden');
+      setTimeout(() => splash.remove(), 260);
+    } else {
+      splash.remove();
+    }
+  }
 }
 
 function renderApp() {

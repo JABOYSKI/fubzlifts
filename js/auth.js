@@ -149,6 +149,9 @@ export function renderAuth(container) {
       </div>
     `;
 
+    // Fade body in once splash is painted
+    requestAnimationFrame(() => { document.body.style.opacity = '1'; });
+
     container.querySelector('#authToggle').addEventListener('click', () => {
       mode = isLogin ? 'register' : 'login';
       render();
@@ -204,7 +207,9 @@ export function renderAuth(container) {
         const reg = await navigator.serviceWorker.getRegistration();
         if (reg) await reg.unregister();
       } catch (e) {}
-      window.location.reload();
+      document.body.style.transition = 'opacity 0.3s ease';
+      document.body.style.opacity = '0';
+      setTimeout(() => window.location.reload(), 350);
     });
 
     // Restore saved credentials if "Remember me" was checked

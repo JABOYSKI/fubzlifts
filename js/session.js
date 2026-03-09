@@ -16,6 +16,19 @@ let timerInterval = null;
 let realtimeChannel = null;
 let onSessionEnd = null;
 
+let groupOwnerId = null; // the group's actual owner
+
+/** Determine who is the session admin (host).
+ *  Priority: group owner if present, otherwise first in turn_order. */
+function getSessionAdmin() {
+  if (!activeSession) return null;
+  const order = activeSession.turn_order || [];
+  // Group owner takes priority if they're in the session
+  if (groupOwnerId && order.includes(groupOwnerId)) return groupOwnerId;
+  // Otherwise first person in turn order is de facto admin
+  return order[0] || null;
+}
+
 /** Get max sets for an exercise, respecting lobby DL override */
 function getMaxSets(exercise) {
   if (exercise === 'deadlift' && activeSession?.lobby_state?.dl_sets) {
@@ -89,6 +102,14 @@ export async function startSession(groupId, container, onEnd) {
       user_id: user.id,
     });
   }
+
+  // Load group owner
+  const { data: groupData } = await supabase
+    .from('groups')
+    .select('owner_id')
+    .eq('id', activeSession.group_id)
+    .single();
+  groupOwnerId = groupData?.owner_id || null;
 
   // Load members and weights
   const members = await getGroupMembers(activeSession.group_id);
@@ -197,7 +218,8 @@ function renderLobby(container) {
 
   const user = getUser();
   const lobbyState = activeSession.lobby_state || { members: {} };
-  const isHost = activeSession.turn_order[0] === user.id;
+  const adminId = getSessionAdmin();
+  const isHost = adminId === user.id;
   const myVote = lobbyState.members?.[user.id] || { workout_vote: 'A', dl_sets_vote: 1, ready: false };
 
   const allMembers = activeSession.turn_order.map(uid => {
@@ -256,7 +278,7 @@ function renderLobby(container) {
             <div class="card-info">
               <div class="card-title">
                 ${esc(m.alias)}
-                ${m.uid === activeSession.turn_order[0] ? '<span class="muted" style="font-size:11px"> (host)</span>' : ''}
+                ${m.uid === adminId ? '<span class="muted" style="font-size:11px"> (host)</span>' : ''}
               </div>
               <div class="card-subtitle muted">
                 Vote: <strong>${m.workout_vote || '?'}</strong> · DL: <strong>${m.dl_sets_vote || '?'}</strong>×5
@@ -740,6 +762,7 @@ export function cleanupSession() {
   clearInterval(timerInterval);
   if (realtimeChannel) supabase.removeChannel(realtimeChannel);
   activeSession = null;
+  groupOwnerId = null;
   setLogs = [];
   timers = {};
 }

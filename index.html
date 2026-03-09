@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+  <title>FubzLifts</title>
+  <link rel="stylesheet" href="css/styles.css"/>
+  <link rel="manifest" href="manifest.json"/>
+  <meta name="theme-color" content="#232F3E"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+</head>
+<body>
+
+  <!-- Header -->
+  <header>
+    <div class="row">
+      <div class="logo">FubzLifts</div>
+      <div class="header-spacer"></div>
+      <div id="headerRight" style="display:none;align-items:center;gap:8px">
+        <span class="header-alias" id="headerAlias"></span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content Area -->
+  <div class="container">
+    <!-- Auth View -->
+    <div id="authView" class="view active"></div>
+
+    <!-- Groups View -->
+    <div id="groupsView" class="view"></div>
+
+    <!-- Session View -->
+    <div id="sessionView" class="view"></div>
+
+    <!-- Profile View -->
+    <div id="profileView" class="view"></div>
+  </div>
+
+  <!-- Bottom Navigation -->
+  <nav class="nav-bar" id="navBar" style="display:none">
+    <button class="nav-tab active" data-page="groups">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+        <circle cx="9" cy="7" r="4"/>
+        <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+        <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+      </svg>
+      Groups
+    </button>
+    <button class="nav-tab" data-page="profile">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+        <circle cx="12" cy="7" r="4"/>
+      </svg>
+      Profile
+    </button>
+  </nav>
+
+  <!-- Toast -->
+  <div id="toast"></div>
+
+  <!-- App Script -->
+  <script type="module" src="js/app.js"></script>
+
+  <!-- Service Worker Registration + Auto-update listener -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener('message', e => {
+        if (e.data && e.data.type === 'SW_UPDATED' && !refreshing) {
+          refreshing = true;
+          document.body.style.transition = 'opacity 0.3s ease';
+          document.body.style.opacity = '0';
+          setTimeout(() => window.location.reload(), 350);
+        }
+      });
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+          .then(reg => reg.update())
+          .catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>

@@ -1,6 +1,7 @@
 // Authentication module
 import { supabase } from './supabase.js';
 import { toast } from './utils.js';
+import { BUILD_TIME } from './version.js';
 
 let currentUser = null;
 
@@ -142,7 +143,7 @@ export function renderAuth(container) {
               : 'Have an account? <a id="authToggle">Sign in</a>'}
           </div>
           <div class="splash-footer">
-            <span class="splash-build">updated ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})} ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}</span>
+            <span class="splash-build">updated ${new Date(BUILD_TIME).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})} ${new Date(BUILD_TIME).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}</span>
             <a id="splashCheckUpdate" class="splash-update-link">Check for update</a>
           </div>
         </div>

@@ -10,6 +10,7 @@ const STATIC_ASSETS = [
   './js/session.js',
   './js/supabase.js',
   './js/utils.js',
+  './js/version.js',
   './manifest.json',
 ];
 

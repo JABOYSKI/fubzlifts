@@ -8,25 +8,33 @@ import {
 } from './utils.js';
 
 let activeSession = null;
-let sessionMembers = []; // { id, alias, avatar_url }
+let sessionMembers = []; // { id, alias, avatar_url, is_admin }
 let memberWeights = {};  // { odified: { exercise: weight_lbs } }
-let setLogs = [];         // all set_logs for this session
-let timers = {};          // { odified: secondsSinceLastSet }
+let setLogs = [];
+let timers = {};
 let timerInterval = null;
 let realtimeChannel = null;
 let onSessionEnd = null;
 
-/** Start or join a session for a group */
-export async function startSession(groupId, container, onEnd, chosenWorkoutType) {
+/** Get max sets for an exercise, respecting lobby DL override */
+function getMaxSets(exercise) {
+  if (exercise === 'deadlift' && activeSession?.lobby_state?.dl_sets) {
+    return activeSession.lobby_state.dl_sets;
+  }
+  return DEFAULT_SETS[exercise];
+}
+
+/** Start or join a session/lobby for a group */
+export async function startSession(groupId, container, onEnd) {
   onSessionEnd = onEnd;
   const user = getUser();
 
-  // Check for active session in this group
+  // Check for active or lobby session in this group
   let { data: existing } = await supabase
     .from('sessions')
     .select('*')
     .eq('group_id', groupId)
-    .eq('status', 'active')
+    .in('status', ['active', 'lobby'])
     .order('started_at', { ascending: false })
     .limit(1);
 
@@ -40,32 +48,42 @@ export async function startSession(groupId, container, onEnd, chosenWorkoutType)
     // Add to turn order if not present
     if (!activeSession.turn_order.includes(user.id)) {
       const newOrder = [...activeSession.turn_order, user.id];
-      await supabase.from('sessions').update({ turn_order: newOrder }).eq('id', activeSession.id);
+      const lobbyState = activeSession.lobby_state || { members: {} };
+      if (activeSession.status === 'lobby' && !lobbyState.members[user.id]) {
+        lobbyState.members[user.id] = { workout_vote: 'A', dl_sets_vote: 1, ready: false };
+      }
+      await supabase.from('sessions').update({
+        turn_order: newOrder,
+        lobby_state: lobbyState,
+      }).eq('id', activeSession.id);
       activeSession.turn_order = newOrder;
+      activeSession.lobby_state = lobbyState;
     }
   } else {
-    // Use chosen workout type, or fall back to group's next_workout
-    const workoutType = chosenWorkoutType || 'A';
-    const exercises = WORKOUTS[workoutType];
-
-    // Create new session
+    // Create new lobby session
+    const lobbyState = {
+      members: {
+        [user.id]: { workout_vote: 'A', dl_sets_vote: 1, ready: false }
+      },
+      dl_sets: 1,
+    };
     const { data: session, error } = await supabase
       .from('sessions')
       .insert({
         group_id: groupId,
-        workout_type: workoutType,
-        status: 'active',
+        workout_type: 'A',
+        status: 'lobby',
         turn_order: [user.id],
-        current_exercise: exercises[0],
+        current_exercise: 'squat',
         current_turn_index: 0,
         current_set: 1,
+        lobby_state: lobbyState,
       })
       .select()
       .single();
     if (error) { toast(error.message); return; }
     activeSession = session;
 
-    // Add creator as session member
     await supabase.from('session_members').insert({
       session_id: session.id,
       user_id: user.id,
@@ -73,16 +91,28 @@ export async function startSession(groupId, container, onEnd, chosenWorkoutType)
   }
 
   // Load members and weights
-  const members = await getGroupMembers(groupId);
+  const members = await getGroupMembers(activeSession.group_id);
   sessionMembers = members;
-  const weights = await getGroupWeights(groupId);
+  const weights = await getGroupWeights(activeSession.group_id);
   memberWeights = {};
   weights.forEach(w => {
     if (!memberWeights[w.user_id]) memberWeights[w.user_id] = {};
     memberWeights[w.user_id][w.exercise] = w.weight_lbs;
   });
 
-  // Load existing set logs
+  // Subscribe to real-time changes
+  subscribeToSession(container);
+
+  if (activeSession.status === 'lobby') {
+    renderLobby(container);
+  } else {
+    // Active session — load logs, start timers
+    await loadSessionState(container);
+  }
+}
+
+/** Load set logs and start timers for an active session */
+async function loadSessionState(container) {
   const { data: logs } = await supabase
     .from('set_logs')
     .select('*')
@@ -90,17 +120,9 @@ export async function startSession(groupId, container, onEnd, chosenWorkoutType)
     .order('logged_at', { ascending: true });
   setLogs = logs || [];
 
-  // Init timers
   timers = {};
   activeSession.turn_order.forEach(uid => { timers[uid] = 0; });
-
-  // Subscribe to real-time changes
-  subscribeToSession(container);
-
-  // Start timer tick
   startTimerTick(container);
-
-  // Render
   renderSession(container);
 }
 
@@ -115,10 +137,22 @@ function subscribeToSession(container) {
       schema: 'public',
       table: 'sessions',
       filter: `id=eq.${activeSession.id}`,
-    }, payload => {
-      if (payload.new) {
-        activeSession = payload.new;
+    }, async payload => {
+      if (!payload.new) return;
+      const prevStatus = activeSession.status;
+      activeSession = payload.new;
+
+      if (activeSession.status === 'completed') {
+        // Session ended — show summary for everyone
+        clearInterval(timerInterval);
+        renderSessionSummary(container);
+      } else if (activeSession.status === 'active' && prevStatus === 'lobby') {
+        // Lobby → active transition — start the session
+        await loadSessionState(container);
+      } else if (activeSession.status === 'active') {
         renderSession(container);
+      } else if (activeSession.status === 'lobby') {
+        renderLobby(container);
       }
     })
     .on('postgres_changes', {
@@ -128,11 +162,9 @@ function subscribeToSession(container) {
       filter: `session_id=eq.${activeSession.id}`,
     }, payload => {
       if (payload.new) {
-        // Avoid duplicates
         if (!setLogs.find(l => l.id === payload.new.id)) {
           setLogs.push(payload.new);
         }
-        // Reset timer for the user who just logged
         timers[payload.new.user_id] = 0;
         renderSession(container);
       }
@@ -143,21 +175,229 @@ function subscribeToSession(container) {
       table: 'session_members',
       filter: `session_id=eq.${activeSession.id}`,
     }, async payload => {
-      // Reload members when someone joins
       const members = await getGroupMembers(activeSession.group_id);
       sessionMembers = members;
       if (payload.new && !timers[payload.new.user_id]) {
         timers[payload.new.user_id] = 0;
       }
-      renderSession(container);
+      if (activeSession.status === 'lobby') {
+        renderLobby(container);
+      } else {
+        renderSession(container);
+      }
     })
     .subscribe();
 }
+
+// ─── LOBBY ───────────────────────────────────────────────
+
+/** Render the pre-session lobby */
+function renderLobby(container) {
+  if (!activeSession || activeSession.status !== 'lobby') return;
+
+  const user = getUser();
+  const lobbyState = activeSession.lobby_state || { members: {} };
+  const isHost = activeSession.turn_order[0] === user.id;
+  const myVote = lobbyState.members?.[user.id] || { workout_vote: 'A', dl_sets_vote: 1, ready: false };
+
+  const allMembers = activeSession.turn_order.map(uid => {
+    const member = sessionMembers.find(m => m.id === uid);
+    const vote = lobbyState.members?.[uid] || {};
+    return { uid, alias: member?.alias || 'Unknown', ...vote };
+  });
+
+  const readyCount = allMembers.filter(m => m.ready).length;
+  const allReady = allMembers.length > 0 && allMembers.every(m => m.ready);
+
+  // Count votes for display
+  const aVotes = allMembers.filter(m => m.workout_vote === 'A').length;
+  const bVotes = allMembers.filter(m => m.workout_vote === 'B').length;
+
+  container.innerHTML = `
+    <div class="exercise-banner">
+      <div class="exercise-name">Workout Lobby</div>
+      <div class="exercise-meta">${allMembers.length} member${allMembers.length !== 1 ? 's' : ''} · ${readyCount} ready</div>
+    </div>
+
+    <!-- Your preferences -->
+    <div class="card" style="margin-top:16px">
+      <div style="font-size:12px;color:var(--muted-color);text-transform:uppercase;letter-spacing:.6px;font-weight:600;margin-bottom:10px">Your Vote</div>
+      <div class="form-group">
+        <label>Workout Type</label>
+        <div class="btn-group">
+          <button class="btn ${myVote.workout_vote === 'A' ? 'btn-primary' : ''} lobby-vote-workout" data-type="A">
+            A — Squat/Bench/Row
+          </button>
+          <button class="btn ${myVote.workout_vote === 'B' ? 'btn-primary' : ''} lobby-vote-workout" data-type="B">
+            B — Squat/OHP/DL
+          </button>
+        </div>
+        <div class="muted" style="font-size:11px;margin-top:4px">Votes: A(${aVotes}) · B(${bVotes})</div>
+      </div>
+      <div class="form-group">
+        <label>Deadlift Sets</label>
+        <div class="btn-group">
+          ${[1,2,3,4,5].map(n => `
+            <button class="btn ${myVote.dl_sets_vote === n ? 'btn-primary' : ''} lobby-vote-dl" data-sets="${n}">${n}</button>
+          `).join('')}
+        </div>
+      </div>
+      <button class="btn ${myVote.ready ? 'btn-primary' : 'btn-secondary'}" id="lobbyReadyBtn" style="margin-top:12px;width:100%">
+        ${myVote.ready ? '✓ Ready — Tap to Unready' : 'Ready Up'}
+      </button>
+    </div>
+
+    <!-- Members list -->
+    <div class="section" style="margin-top:16px">
+      <h3>Members</h3>
+      ${allMembers.map(m => `
+        <div class="card" style="margin-bottom:6px">
+          <div class="card-row">
+            <div class="card-info">
+              <div class="card-title">
+                ${esc(m.alias)}
+                ${m.uid === activeSession.turn_order[0] ? '<span class="muted" style="font-size:11px"> (host)</span>' : ''}
+              </div>
+              <div class="card-subtitle muted">
+                Vote: <strong>${m.workout_vote || '?'}</strong> · DL: <strong>${m.dl_sets_vote || '?'}</strong>×5
+              </div>
+            </div>
+            <div style="font-size:22px;color:${m.ready ? 'var(--teal)' : 'var(--muted-color)'}">${m.ready ? '✓' : '○'}</div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+
+    ${isHost ? `
+      <!-- Host controls -->
+      <div class="card" style="border:1px solid var(--orange);margin-top:16px">
+        <div style="font-size:12px;color:var(--orange);text-transform:uppercase;letter-spacing:.6px;font-weight:600;margin-bottom:10px">Host Controls</div>
+        <div class="form-group">
+          <label>Final Workout</label>
+          <div class="btn-group">
+            <button class="btn ${activeSession.workout_type === 'A' ? 'btn-primary' : ''} admin-set-workout" data-type="A">A</button>
+            <button class="btn ${activeSession.workout_type === 'B' ? 'btn-primary' : ''} admin-set-workout" data-type="B">B</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Final Deadlift Sets</label>
+          <div class="btn-group">
+            ${[1,2,3,4,5].map(n => `
+              <button class="btn ${(lobbyState.dl_sets || 1) === n ? 'btn-primary' : ''} admin-set-dl" data-sets="${n}">${n}</button>
+            `).join('')}
+          </div>
+        </div>
+        <button class="btn btn-primary btn-large" id="lobbyStartBtn" style="margin-top:12px;width:100%" ${allReady ? '' : 'disabled'}>
+          Start Workout (${readyCount}/${allMembers.length} ready)
+        </button>
+      </div>
+    ` : `
+      <div class="card" style="margin-top:16px">
+        <div class="muted" style="text-align:center;padding:8px 0">
+          Waiting for host to start... (${readyCount}/${allMembers.length} ready)
+        </div>
+      </div>
+    `}
+
+    <button class="btn" id="lobbyLeaveBtn" style="margin-top:16px;width:100%">Leave Lobby</button>
+  `;
+
+  // ── Event handlers ──
+
+  // Vote workout type
+  container.querySelectorAll('.lobby-vote-workout').forEach(btn => {
+    btn.addEventListener('click', () => updateMyLobbyState({ workout_vote: btn.dataset.type }));
+  });
+
+  // Vote DL sets
+  container.querySelectorAll('.lobby-vote-dl').forEach(btn => {
+    btn.addEventListener('click', () => updateMyLobbyState({ dl_sets_vote: parseInt(btn.dataset.sets) }));
+  });
+
+  // Ready toggle
+  container.querySelector('#lobbyReadyBtn').addEventListener('click', () => {
+    updateMyLobbyState({ ready: !myVote.ready });
+  });
+
+  // Host: set final workout
+  container.querySelectorAll('.admin-set-workout').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await supabase.from('sessions').update({ workout_type: btn.dataset.type }).eq('id', activeSession.id);
+    });
+  });
+
+  // Host: set final DL sets
+  container.querySelectorAll('.admin-set-dl').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const lobbyState = { ...activeSession.lobby_state, dl_sets: parseInt(btn.dataset.sets) };
+      await supabase.from('sessions').update({ lobby_state: lobbyState }).eq('id', activeSession.id);
+    });
+  });
+
+  // Host: start session
+  container.querySelector('#lobbyStartBtn')?.addEventListener('click', () => adminStartSession(container));
+
+  // Leave lobby
+  container.querySelector('#lobbyLeaveBtn').addEventListener('click', () => leaveLobby());
+}
+
+/** Update this user's lobby state (vote/ready) */
+async function updateMyLobbyState(updates) {
+  const user = getUser();
+  const lobbyState = { ...activeSession.lobby_state };
+  if (!lobbyState.members) lobbyState.members = {};
+  if (!lobbyState.members[user.id]) lobbyState.members[user.id] = {};
+  Object.assign(lobbyState.members[user.id], updates);
+  await supabase.from('sessions').update({ lobby_state: lobbyState }).eq('id', activeSession.id);
+}
+
+/** Host starts the workout — transition lobby → active */
+async function adminStartSession(container) {
+  const exercises = WORKOUTS[activeSession.workout_type];
+
+  await supabase.from('sessions').update({
+    status: 'active',
+    current_exercise: exercises[0],
+    current_turn_index: 0,
+    current_set: 1,
+  }).eq('id', activeSession.id);
+
+  // The realtime subscription will pick up the status change and render
+}
+
+/** Leave the lobby and go back to groups */
+async function leaveLobby() {
+  const user = getUser();
+
+  // Remove from turn order
+  const newOrder = activeSession.turn_order.filter(uid => uid !== user.id);
+  const lobbyState = { ...activeSession.lobby_state };
+  if (lobbyState.members) delete lobbyState.members[user.id];
+
+  if (newOrder.length === 0) {
+    // Last person — delete the lobby session
+    await supabase.from('session_members').delete().eq('session_id', activeSession.id);
+    await supabase.from('sessions').delete().eq('id', activeSession.id);
+  } else {
+    await supabase.from('sessions').update({
+      turn_order: newOrder,
+      lobby_state: lobbyState,
+    }).eq('id', activeSession.id);
+    await supabase.from('session_members').delete()
+      .eq('session_id', activeSession.id).eq('user_id', user.id);
+  }
+
+  cleanupSession();
+  if (onSessionEnd) onSessionEnd();
+}
+
+// ─── ACTIVE SESSION ──────────────────────────────────────
 
 /** Timer tick — increment rest timers for everyone except the active person */
 function startTimerTick(container) {
   clearInterval(timerInterval);
   timerInterval = setInterval(() => {
+    if (!activeSession || activeSession.status !== 'active') return;
     const activeTurnUserId = activeSession.turn_order[activeSession.current_turn_index];
     activeSession.turn_order.forEach(uid => {
       if (uid !== activeTurnUserId) {
@@ -173,10 +413,9 @@ function updateTimerDisplay() {
   activeSession.turn_order.forEach(uid => {
     const el = document.querySelector(`.timer-value[data-uid="${uid}"]`);
     if (el) el.textContent = formatTime(timers[uid] || 0);
-    // Update bar fill
     const bar = document.querySelector(`.timer-bar-fill[data-uid="${uid}"]`);
     if (bar) {
-      const pct = Math.min((timers[uid] || 0) / 300, 1) * 100; // 300s = 5min
+      const pct = Math.min((timers[uid] || 0) / 300, 1) * 100;
       bar.style.width = pct + '%';
       bar.classList.toggle('warn', timers[uid] >= 180 && timers[uid] < 300);
       bar.classList.toggle('over', timers[uid] >= 300);
@@ -192,7 +431,6 @@ async function logSet(success) {
   const myLogs = setLogs.filter(l => l.user_id === user.id && l.exercise === exercise);
   const setNumber = myLogs.length + 1;
 
-  // Insert set log
   const { data: log, error } = await supabase
     .from('set_logs')
     .insert({
@@ -209,11 +447,9 @@ async function logSet(success) {
 
   if (error) { toast(error.message); return; }
 
-  // Add locally immediately
   if (!setLogs.find(l => l.id === log.id)) setLogs.push(log);
   timers[user.id] = 0;
 
-  // Determine next turn
   await advanceTurn();
 }
 
@@ -221,7 +457,7 @@ async function logSet(success) {
 async function advanceTurn() {
   const exercises = WORKOUTS[activeSession.workout_type];
   const exercise = activeSession.current_exercise;
-  const maxSets = DEFAULT_SETS[exercise];
+  const maxSets = getMaxSets(exercise);
 
   // Check if everyone has finished their sets for this exercise
   const allDone = activeSession.turn_order.every(uid => {
@@ -230,23 +466,19 @@ async function advanceTurn() {
   });
 
   if (allDone) {
-    // Move to next exercise
     const currentIdx = exercises.indexOf(exercise);
     if (currentIdx < exercises.length - 1) {
       const nextExercise = exercises[currentIdx + 1];
-      // Show splash then advance
       showExerciseSplash(exercise, () => {
         supabase.from('sessions').update({
           current_exercise: nextExercise,
           current_turn_index: 0,
           current_set: 1,
         }).eq('id', activeSession.id).then(() => {
-          // Reset timers for new exercise
           activeSession.turn_order.forEach(uid => { timers[uid] = 0; });
         });
       });
     } else {
-      // Session complete!
       await endSession();
     }
     return;
@@ -287,7 +519,6 @@ function showExerciseSplash(exercise, onDone) {
 
 /** End the session */
 async function endSession() {
-  // Update session status
   await supabase.from('sessions').update({
     status: 'completed',
     ended_at: new Date().toISOString(),
@@ -297,16 +528,12 @@ async function endSession() {
   const nextWorkout = activeSession.workout_type === 'A' ? 'B' : 'A';
   await supabase.from('groups').update({ next_workout: nextWorkout }).eq('id', activeSession.group_id);
 
-  // Process progression for each user
   await processProgression();
 
-  // Show summary
+  // Show summary locally (other clients get it via realtime)
   const container = document.getElementById('sessionView');
-  renderSessionSummary(container);
-
-  // Cleanup
   clearInterval(timerInterval);
-  if (realtimeChannel) supabase.removeChannel(realtimeChannel);
+  renderSessionSummary(container);
 }
 
 /** Process weight progression after session ends */
@@ -315,7 +542,7 @@ async function processProgression() {
 
   for (const uid of activeSession.turn_order) {
     for (const exercise of exercises) {
-      const maxSets = DEFAULT_SETS[exercise];
+      const maxSets = getMaxSets(exercise);
       const userLogs = setLogs.filter(l => l.user_id === uid && l.exercise === exercise);
       const allSuccess = userLogs.length >= maxSets && userLogs.every(l => l.success);
       const anyFail = userLogs.some(l => !l.success);
@@ -331,7 +558,6 @@ async function processProgression() {
       if (!weightRow) continue;
 
       if (allSuccess) {
-        // Progress: +5 lbs, reset fail streak
         await supabase.from('user_weights').update({
           weight_lbs: weightRow.weight_lbs + 5,
           fail_streak: 0,
@@ -341,7 +567,6 @@ async function processProgression() {
         await supabase.from('user_weights').update({
           fail_streak: newStreak,
         }).eq('user_id', uid).eq('group_id', activeSession.group_id).eq('exercise', exercise);
-        // Deload prompt handled client-side for the current user
       }
     }
   }
@@ -349,19 +574,18 @@ async function processProgression() {
 
 /** Render the active session */
 function renderSession(container) {
-  if (!activeSession || activeSession.status === 'completed') return;
+  if (!activeSession || activeSession.status !== 'active') return;
 
   const user = getUser();
   const exercise = activeSession.current_exercise;
   const exerciseName = EXERCISE_NAMES[exercise];
-  const maxSets = DEFAULT_SETS[exercise];
+  const maxSets = getMaxSets(exercise);
   const exercises = WORKOUTS[activeSession.workout_type];
   const activeTurnUserId = activeSession.turn_order[activeSession.current_turn_index];
   const isMyTurn = activeTurnUserId === user.id;
   const activeAlias = sessionMembers.find(m => m.id === activeTurnUserId)?.alias || 'Unknown';
   const weight = memberWeights[activeTurnUserId]?.[exercise] || 45;
 
-  // Current user's logs for this exercise
   const activeLogs = setLogs.filter(l => l.user_id === activeTurnUserId && l.exercise === exercise);
   const currentSetNum = activeLogs.length + 1;
 
@@ -382,7 +606,6 @@ function renderSession(container) {
       ${weight} <span class="weight-unit">lbs</span>
     </div>
 
-    <!-- Set dots for active person -->
     <div class="set-dots">
       ${Array.from({ length: maxSets }, (_, i) => {
         const log = activeLogs[i];
@@ -394,7 +617,6 @@ function renderSession(container) {
       }).join('')}
     </div>
 
-    <!-- Action buttons (only active for current turn) -->
     ${isMyTurn ? `
       <div style="margin:16px 0;display:flex;flex-direction:column;gap:8px;align-items:center">
         <button class="btn btn-primary btn-large" id="doneBtn">
@@ -410,7 +632,6 @@ function renderSession(container) {
       </div>
     `}
 
-    <!-- Timer stack -->
     <div class="section">
       <h3>Rest Timers</h3>
       <div class="timer-stack">
@@ -433,19 +654,18 @@ function renderSession(container) {
       </div>
     </div>
 
-    <!-- All members' progress for this exercise -->
     <div class="section">
       <h3>Progress — ${exerciseName}</h3>
       ${activeSession.turn_order.map(uid => {
         const member = sessionMembers.find(m => m.id === uid);
         const alias = member?.alias || 'Unknown';
         const userLogs = setLogs.filter(l => l.user_id === uid && l.exercise === exercise);
-        const memberWeight = memberWeights[uid]?.[exercise] || 45;
+        const mw = memberWeights[uid]?.[exercise] || 45;
         return `
           <div class="card" style="margin-bottom:6px">
             <div class="card-row">
               <div class="card-info">
-                <div class="card-title">${esc(alias)} <span class="muted">${memberWeight} lbs</span></div>
+                <div class="card-title">${esc(alias)} <span class="muted">${mw} lbs</span></div>
               </div>
               <div class="set-dots" style="margin:0">
                 ${Array.from({ length: maxSets }, (_, i) => {
@@ -463,7 +683,6 @@ function renderSession(container) {
     </div>
   `;
 
-  // Button handlers
   if (isMyTurn) {
     container.querySelector('#doneBtn')?.addEventListener('click', () => logSet(true));
     container.querySelector('#failBtn')?.addEventListener('click', () => logSet(false));

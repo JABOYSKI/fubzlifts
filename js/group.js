@@ -200,18 +200,6 @@ export function renderGroups(container, onSelectGroup, onStartSession) {
                 </div>
               </div>
             </div>
-            <!-- Workout picker (hidden until Start is tapped) -->
-            <div class="workout-picker" data-id="${g.id}" style="display:none">
-              <div style="font-size:12px;color:var(--muted-color);margin:10px 0 6px;text-transform:uppercase;letter-spacing:.6px;font-weight:600">Pick workout</div>
-              <div class="btn-group">
-                <button class="btn pick-workout ${g.next_workout === 'A' ? 'btn-primary' : ''}" data-id="${g.id}" data-type="A">
-                  A — Squat / Bench / Row
-                </button>
-                <button class="btn pick-workout ${g.next_workout === 'B' ? 'btn-primary' : ''}" data-id="${g.id}" data-type="B">
-                  B — Squat / OHP / DL
-                </button>
-              </div>
-            </div>
           </div>
         `).join('')}
       </div>
@@ -257,20 +245,10 @@ export function renderGroups(container, onSelectGroup, onStartSession) {
       });
     });
 
-    // Event: start session — show workout picker
+    // Event: start session — go to lobby
     container.querySelectorAll('.start-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        // Hide all other pickers
-        container.querySelectorAll('.workout-picker').forEach(p => p.style.display = 'none');
-        const picker = container.querySelector(`.workout-picker[data-id="${btn.dataset.id}"]`);
-        picker.style.display = picker.style.display === 'none' ? 'block' : 'none';
-      });
-    });
-
-    // Event: pick A or B workout
-    container.querySelectorAll('.pick-workout').forEach(btn => {
-      btn.addEventListener('click', () => {
-        onStartSession(btn.dataset.id, btn.dataset.type);
+        onStartSession(btn.dataset.id);
       });
     });
 
@@ -279,7 +257,7 @@ export function renderGroups(container, onSelectGroup, onStartSession) {
       btn.addEventListener('click', async () => {
         const gId = btn.dataset.id;
         // Hide all other pickers/confirmations
-        container.querySelectorAll('.workout-picker, .delete-confirm').forEach(p => p.style.display = 'none');
+        container.querySelectorAll('.delete-confirm').forEach(p => p.style.display = 'none');
         const confirm = container.querySelector(`.delete-confirm[data-id="${gId}"]`);
         confirm.style.display = 'block';
 

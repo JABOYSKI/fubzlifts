@@ -124,6 +124,26 @@ async function initUserWeights(userId, groupId) {
   await supabase.from('user_weights').upsert(rows);
 }
 
+/** Delete a group — removes all related data */
+export async function deleteGroup(groupId) {
+  const user = getUser();
+  if (!user) return false;
+
+  // Delete in order: set_logs → sessions, session_members → user_weights → group_members → group
+  await supabase.from('set_logs').delete().eq('group_id', groupId);
+  await supabase.from('session_members').delete().in(
+    'session_id',
+    (await supabase.from('sessions').select('id').eq('group_id', groupId)).data?.map(s => s.id) || []
+  );
+  await supabase.from('sessions').delete().eq('group_id', groupId);
+  await supabase.from('user_weights').delete().eq('group_id', groupId);
+  await supabase.from('group_members').delete().eq('group_id', groupId);
+  const { error } = await supabase.from('groups').delete().eq('id', groupId);
+  if (error) { toast(error.message); return false; }
+  toast('Group deleted');
+  return true;
+}
+
 /** Render group list view */
 export function renderGroups(container, onSelectGroup, onStartSession) {
   let groups = [];
@@ -156,7 +176,29 @@ export function renderGroups(container, onSelectGroup, onStartSession) {
                   Created ${new Date(g.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}
                 </div>
               </div>
-              <button class="btn btn-primary start-btn" data-id="${g.id}">Start</button>
+              <div style="display:flex;gap:6px;align-items:center">
+                <button class="btn btn-primary start-btn" data-id="${g.id}">Start</button>
+                <button class="btn btn-danger delete-group-btn" data-id="${g.id}" style="padding:6px 10px;font-size:12px">✕</button>
+              </div>
+            </div>
+            <!-- Delete confirmation (hidden) -->
+            <div class="delete-confirm" data-id="${g.id}" style="display:none">
+              <div style="font-size:13px;color:var(--danger);margin:10px 0 8px;font-weight:600">Delete "${esc(g.name)}"?</div>
+              <div class="delete-step1" data-id="${g.id}">
+                <div style="font-size:12px;color:var(--muted-color);margin-bottom:8px">This will remove all group data permanently.</div>
+                <div class="btn-group">
+                  <button class="btn btn-danger delete-step1-yes" data-id="${g.id}">Yes, delete</button>
+                  <button class="btn delete-cancel" data-id="${g.id}">Cancel</button>
+                </div>
+              </div>
+              <div class="delete-step2" data-id="${g.id}" style="display:none">
+                <div style="font-size:12px;color:var(--muted-color);margin-bottom:8px">Type <strong style="color:var(--danger)">DELETE</strong> to confirm:</div>
+                <input class="field delete-confirm-input" data-id="${g.id}" placeholder="Type DELETE" style="text-transform:uppercase;margin-bottom:8px" />
+                <div class="btn-group">
+                  <button class="btn btn-danger delete-final" data-id="${g.id}" disabled>Confirm Delete</button>
+                  <button class="btn delete-cancel" data-id="${g.id}">Cancel</button>
+                </div>
+              </div>
             </div>
             <!-- Workout picker (hidden until Start is tapped) -->
             <div class="workout-picker" data-id="${g.id}" style="display:none">
@@ -210,7 +252,7 @@ export function renderGroups(container, onSelectGroup, onStartSession) {
     // Event: tap group card to view details
     container.querySelectorAll('.group-card').forEach(card => {
       card.addEventListener('click', e => {
-        if (e.target.closest('.start-btn')) return;
+        if (e.target.closest('.start-btn') || e.target.closest('.delete-group-btn') || e.target.closest('.delete-confirm')) return;
         onSelectGroup(card.dataset.id);
       });
     });
@@ -229,6 +271,76 @@ export function renderGroups(container, onSelectGroup, onStartSession) {
     container.querySelectorAll('.pick-workout').forEach(btn => {
       btn.addEventListener('click', () => {
         onStartSession(btn.dataset.id, btn.dataset.type);
+      });
+    });
+
+    // Delete group flow
+    container.querySelectorAll('.delete-group-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const gId = btn.dataset.id;
+        // Hide all other pickers/confirmations
+        container.querySelectorAll('.workout-picker, .delete-confirm').forEach(p => p.style.display = 'none');
+        const confirm = container.querySelector(`.delete-confirm[data-id="${gId}"]`);
+        confirm.style.display = 'block';
+
+        // Check member count to decide flow
+        const members = await getGroupMembers(gId);
+        const step1 = confirm.querySelector(`.delete-step1[data-id="${gId}"]`);
+        const step2 = confirm.querySelector(`.delete-step2[data-id="${gId}"]`);
+
+        if (members.length <= 1) {
+          // Solo group — single confirm
+          step1.style.display = 'block';
+          step2.style.display = 'none';
+        } else {
+          // Multi-member — show step 1 first
+          step1.style.display = 'block';
+          step2.style.display = 'none';
+        }
+      });
+    });
+
+    // Step 1: "Yes, delete" → if multi-member, show step 2; if solo, delete immediately
+    container.querySelectorAll('.delete-step1-yes').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const gId = btn.dataset.id;
+        const members = await getGroupMembers(gId);
+        if (members.length <= 1) {
+          // Solo — delete now
+          const ok = await deleteGroup(gId);
+          if (ok) await load();
+        } else {
+          // Multi-member — require typing DELETE
+          const step1 = container.querySelector(`.delete-step1[data-id="${gId}"]`);
+          const step2 = container.querySelector(`.delete-step2[data-id="${gId}"]`);
+          step1.style.display = 'none';
+          step2.style.display = 'block';
+        }
+      });
+    });
+
+    // Step 2: enable final button only when "DELETE" is typed
+    container.querySelectorAll('.delete-confirm-input').forEach(input => {
+      input.addEventListener('input', () => {
+        const gId = input.dataset.id;
+        const finalBtn = container.querySelector(`.delete-final[data-id="${gId}"]`);
+        finalBtn.disabled = input.value.trim().toUpperCase() !== 'DELETE';
+      });
+    });
+
+    // Step 2: final delete
+    container.querySelectorAll('.delete-final').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const ok = await deleteGroup(btn.dataset.id);
+        if (ok) await load();
+      });
+    });
+
+    // Cancel delete
+    container.querySelectorAll('.delete-cancel').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const confirm = container.querySelector(`.delete-confirm[data-id="${btn.dataset.id}"]`);
+        confirm.style.display = 'none';
       });
     });
 

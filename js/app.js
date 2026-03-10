@@ -2,7 +2,7 @@
 import { initAuth, onAuthChange, renderAuth, signOut, getUser } from './auth.js';
 import { renderGroups } from './group.js';
 import { startSession, cleanupSession } from './session.js';
-import { supabase, ensureFreshAuth } from './supabase.js';
+import { supabase } from './supabase.js';
 import { showView, toast, EXERCISE_NAMES } from './utils.js';
 
 let currentGroupRef = null;
@@ -66,8 +66,7 @@ function renderApp() {
   navigateTo('groups');
 }
 
-async function navigateTo(page) {
-  await ensureFreshAuth();
+function navigateTo(page) {
   cleanupSession();
 
   // Update nav tabs

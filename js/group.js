@@ -1,11 +1,11 @@
 // Group management module
-import { supabase, ensureFreshAuth } from './supabase.js';
+import { supabase } from './supabase.js';
 import { getUser } from './auth.js';
 import { toast, generateJoinCode } from './utils.js';
 
 /** Fetch all groups the current user belongs to */
 export async function getMyGroups() {
-  await ensureFreshAuth();
+
   const user = getUser();
   if (!user) return [];
   const { data, error } = await supabase
@@ -28,7 +28,7 @@ export async function getGroupMembers(groupId) {
 
 /** Create a new group */
 export async function createGroup(name) {
-  await ensureFreshAuth();
+
   const user = getUser();
   if (!user) return null;
 
@@ -64,7 +64,7 @@ export async function createGroup(name) {
 
 /** Join a group via code */
 export async function joinGroup(code) {
-  await ensureFreshAuth();
+
   const user = getUser();
   if (!user) return null;
 
@@ -102,7 +102,7 @@ export async function joinGroup(code) {
 
 /** Delete a group — removes all related data */
 export async function deleteGroup(groupId) {
-  await ensureFreshAuth();
+
   const user = getUser();
   if (!user) return false;
 

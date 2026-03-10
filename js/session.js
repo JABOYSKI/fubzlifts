@@ -161,6 +161,8 @@ function subscribeToSession(container) {
   if (!visibilityHandler) {
     visibilityHandler = async () => {
       if (document.visibilityState === 'visible' && activeSession && lobbyContainer) {
+        // Ensure auth token is fresh before making API calls
+        try { await supabase.auth.refreshSession(); } catch (e) {}
         const { data } = await supabase.from('sessions').select('*').eq('id', activeSession.id).single();
         if (data) {
           activeSession = data;

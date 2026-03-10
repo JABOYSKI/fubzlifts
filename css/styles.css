@@ -319,8 +319,17 @@ h3 { margin: 0 0 8px; font-size: 11px; font-weight: 600; color: var(--muted-colo
 .splash-card .field { width: 100%; box-sizing: border-box; font-size: .95rem; }
 .splash-submit { width: 100%; margin-top: 4px; padding: 12px; font-size: 15px; font-weight: 700; }
 .splash-error {
-  color: var(--danger); font-size: .82rem; min-height: 1em;
-  margin-top: -4px; text-align: left;
+  color: var(--danger); font-size: .85rem; min-height: 0;
+  margin-top: -4px; text-align: center;
+  transition: all .2s ease;
+}
+.splash-error:not(:empty) {
+  background: rgba(255,59,48,.12);
+  border: 1px solid rgba(255,59,48,.3);
+  border-radius: 8px;
+  padding: 10px 14px;
+  min-height: auto;
+  font-weight: 500;
 }
 .splash-toggle {
   text-align: center; font-size: 12px; color: var(--muted-color);

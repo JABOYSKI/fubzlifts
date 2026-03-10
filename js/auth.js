@@ -69,21 +69,20 @@ export async function signUp(email, password, alias) {
     password,
     options: { data: { alias } },
   });
-  if (error) {
-    toast(error.message);
-    return null;
-  }
-  return true; // onAuthChange handles the rest
+  if (error) return { ok: false, msg: error.message };
+  return { ok: true };
 }
 
 /** Sign in with email + password */
 export async function signIn(email, password) {
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) {
-    toast(error.message);
-    return null;
+    // Make Supabase error messages friendlier
+    let msg = error.message;
+    if (msg.includes('Invalid login')) msg = 'Wrong email or password.';
+    return { ok: false, msg };
   }
-  return true; // onAuthChange handles the rest
+  return { ok: true };
 }
 
 /** Sign out */
@@ -180,13 +179,13 @@ export function renderAuth(container) {
       btn.textContent = 'Loading...';
 
       if (isLogin) {
-        const ok = await signIn(email, pass);
-        if (!ok) { btn.disabled = false; btn.textContent = 'Sign In'; }
+        const result = await signIn(email, pass);
+        if (!result.ok) { btn.disabled = false; btn.textContent = 'Sign In'; errEl.textContent = result.msg; }
       } else {
         const alias = container.querySelector('#authAlias').value.trim();
         if (!alias) { btn.disabled = false; btn.textContent = 'Create Account'; errEl.textContent = 'Pick an alias.'; return; }
-        const ok = await signUp(email, pass, alias);
-        if (!ok) { btn.disabled = false; btn.textContent = 'Create Account'; }
+        const result = await signUp(email, pass, alias);
+        if (!result.ok) { btn.disabled = false; btn.textContent = 'Create Account'; errEl.textContent = result.msg; }
       }
     });
 

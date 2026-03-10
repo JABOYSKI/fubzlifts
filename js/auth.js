@@ -219,20 +219,27 @@ export function renderAuth(container) {
       });
     });
 
-    // Check for update — clears all caches, unregisters SW, hard reloads
+    // Check for update — clears all caches, unregisters SW, hard reloads with cache bust
     container.querySelector('#splashCheckUpdate').addEventListener('click', async () => {
       const btn = container.querySelector('#splashCheckUpdate');
       btn.textContent = 'Updating…';
       btn.style.pointerEvents = 'none';
       try {
+        // Clear all SW caches
         const cacheNames = await caches.keys();
         await Promise.all(cacheNames.map(n => caches.delete(n)));
-        const reg = await navigator.serviceWorker.getRegistration();
-        if (reg) await reg.unregister();
+        // Unregister service worker
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(r => r.unregister()));
       } catch (e) {}
       document.body.style.transition = 'opacity 0.3s ease';
       document.body.style.opacity = '0';
-      setTimeout(() => window.location.reload(), 350);
+      // Navigate with cache-busting param to bypass browser HTTP cache
+      setTimeout(() => {
+        const url = new URL(window.location.href);
+        url.searchParams.set('_cb', Date.now());
+        window.location.replace(url.href);
+      }, 350);
     });
 
     // Restore saved credentials if "Remember me" was checked

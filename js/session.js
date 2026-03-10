@@ -312,7 +312,7 @@ function renderLobby(container) {
       </div>
 
       <div id="lobbyHostArea">
-        ${renderHostArea(isHost, allReady, readyCount, allMembers.length, lobbyState)}
+        ${renderHostArea(isHost, allReady, readyCount, allMembers.length, lobbyState, allMembers)}
       </div>
 
       <button class="btn" id="lobbyLeaveBtn" style="margin-top:16px;width:100%">Leave Lobby</button>
@@ -342,17 +342,36 @@ function renderMemberCards(allMembers, adminId) {
   `).join('');
 }
 
+/** Get the winning workout vote (A or B), defaulting to A on tie */
+function getWinningVote(allMembers) {
+  const aVotes = allMembers.filter(m => m.workout_vote === 'A').length;
+  const bVotes = allMembers.filter(m => m.workout_vote === 'B').length;
+  return bVotes > aVotes ? 'B' : 'A';
+}
+
+let hostUsurped = false; // tracks whether host manually overrode the vote
+
 /** Render host controls area HTML */
-function renderHostArea(isHost, allReady, readyCount, totalMembers, lobbyState) {
+function renderHostArea(isHost, allReady, readyCount, totalMembers, lobbyState, allMembers) {
   if (isHost) {
+    const winningVote = getWinningVote(allMembers || []);
+    const currentType = activeSession.workout_type;
+    const isUsurped = currentType !== winningVote;
     return `
       <div class="card" style="border:1px solid var(--orange);margin-top:16px">
         <div style="font-size:12px;color:var(--orange);text-transform:uppercase;letter-spacing:.6px;font-weight:600;margin-bottom:10px">Host Controls</div>
         <div class="form-group">
-          <label>Workout Type</label>
+          <label>Workout Type <span class="muted" style="font-size:11px;font-weight:400">(follows vote${isUsurped ? ' — overridden' : ''})</span></label>
           <div class="btn-group" id="adminWorkoutBtns">
-            <button class="btn ${activeSession.workout_type === 'A' ? 'btn-primary' : ''} admin-set-workout" data-type="A">A</button>
-            <button class="btn ${activeSession.workout_type === 'B' ? 'btn-primary' : ''} admin-set-workout" data-type="B">B</button>
+            <button class="btn ${currentType === 'A' ? 'btn-primary' : ''} admin-set-workout" data-type="A">A</button>
+            <button class="btn ${currentType === 'B' ? 'btn-primary' : ''} admin-set-workout" data-type="B">B</button>
+          </div>
+          <div id="usurpConfirm" style="display:none;margin-top:8px">
+            <div style="font-size:12px;color:var(--orange);margin-bottom:6px">Override the group vote?</div>
+            <div class="btn-group">
+              <button class="btn btn-primary" id="usurpYes" style="font-size:12px">Yes, override</button>
+              <button class="btn" id="usurpNo" style="font-size:12px">Cancel</button>
+            </div>
           </div>
         </div>
         <div class="form-group">
@@ -407,12 +426,43 @@ function patchLobby(container, state) {
   const membersList = container.querySelector('#lobbyMembersList');
   if (membersList) membersList.innerHTML = renderMemberCards(allMembers, adminId);
 
-  // Patch host area — must rebind events if host area structure changed
-  const hostArea = container.querySelector('#lobbyHostArea');
-  if (hostArea) {
-    const newHTML = renderHostArea(isHost, allReady, readyCount, allMembers.length, lobbyState);
-    hostArea.innerHTML = newHTML;
-    bindHostEvents(container);
+  // Patch host area in-place
+  if (isHost) {
+    const currentType = activeSession.workout_type;
+    // Patch admin workout buttons
+    container.querySelectorAll('.admin-set-workout').forEach(btn => {
+      btn.classList.toggle('btn-primary', btn.dataset.type === currentType);
+    });
+    // Patch admin DL buttons
+    container.querySelectorAll('.admin-set-dl').forEach(btn => {
+      btn.classList.toggle('btn-primary', parseInt(btn.dataset.sets) === (lobbyState.dl_sets || 1));
+    });
+    // Patch start button
+    const startBtn = container.querySelector('#lobbyStartBtn');
+    if (startBtn) {
+      startBtn.disabled = !allReady;
+      startBtn.textContent = `Start Workout (${readyCount}/${allMembers.length} ready)`;
+    }
+    // Auto-follow vote unless host usurped (applied when votes change via realtime)
+    const winningVote = getWinningVote(allMembers);
+    if (!hostUsurped && currentType !== winningVote) {
+      activeSession.workout_type = winningVote;
+      container.querySelectorAll('.admin-set-workout').forEach(btn => {
+        btn.classList.toggle('btn-primary', btn.dataset.type === winningVote);
+      });
+      supabase.from('sessions').update({ workout_type: winningVote }).eq('id', activeSession.id);
+    }
+  } else {
+    // Non-host: patch wait message
+    const waitMsg = container.querySelector('#lobbyWaitMsg');
+    if (waitMsg) waitMsg.textContent = `Waiting for host to start... (${readyCount}/${allMembers.length} ready)`;
+    // If host area was showing host controls but we're no longer host, rebuild it
+    if (container.querySelector('#adminWorkoutBtns')) {
+      const hostArea = container.querySelector('#lobbyHostArea');
+      if (hostArea) {
+        hostArea.innerHTML = renderHostArea(false, allReady, readyCount, allMembers.length, lobbyState, allMembers);
+      }
+    }
   }
 }
 
@@ -438,15 +488,58 @@ function bindLobbyEvents(container, myVote) {
 
 /** Bind host-only event handlers (called on initial render and on patch) */
 function bindHostEvents(container) {
+  let pendingUsurpType = null;
+
   container.querySelectorAll('.admin-set-workout').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      await supabase.from('sessions').update({ workout_type: btn.dataset.type }).eq('id', activeSession.id);
+    btn.addEventListener('click', () => {
+      const type = btn.dataset.type;
+      const lobbyState = activeSession.lobby_state || { members: {} };
+      const allMembers = activeSession.turn_order.map(uid => {
+        const vote = lobbyState.members?.[uid] || {};
+        return vote;
+      });
+      const winningVote = getWinningVote(allMembers.map((v, i) => ({
+        workout_vote: v.workout_vote,
+        uid: activeSession.turn_order[i],
+      })));
+
+      if (type !== winningVote) {
+        // Show usurp confirmation
+        pendingUsurpType = type;
+        const confirm = container.querySelector('#usurpConfirm');
+        if (confirm) confirm.style.display = 'block';
+      } else {
+        // Matches vote — just set it, clear usurp
+        hostUsurped = false;
+        supabase.from('sessions').update({ workout_type: type }).eq('id', activeSession.id);
+      }
     });
+  });
+
+  container.querySelector('#usurpYes')?.addEventListener('click', async () => {
+    if (pendingUsurpType) {
+      hostUsurped = true;
+      await supabase.from('sessions').update({ workout_type: pendingUsurpType }).eq('id', activeSession.id);
+      const confirm = container.querySelector('#usurpConfirm');
+      if (confirm) confirm.style.display = 'none';
+      pendingUsurpType = null;
+    }
+  });
+
+  container.querySelector('#usurpNo')?.addEventListener('click', () => {
+    pendingUsurpType = null;
+    const confirm = container.querySelector('#usurpConfirm');
+    if (confirm) confirm.style.display = 'none';
   });
 
   container.querySelectorAll('.admin-set-dl').forEach(btn => {
     btn.addEventListener('click', async () => {
       const ls = { ...activeSession.lobby_state, dl_sets: parseInt(btn.dataset.sets) };
+      // Optimistic local update
+      activeSession.lobby_state = ls;
+      container.querySelectorAll('.admin-set-dl').forEach(b => {
+        b.classList.toggle('btn-primary', parseInt(b.dataset.sets) === parseInt(btn.dataset.sets));
+      });
       await supabase.from('sessions').update({ lobby_state: ls }).eq('id', activeSession.id);
     });
   });
@@ -466,7 +559,18 @@ async function updateMyLobbyState(updates) {
   activeSession.lobby_state = lobbyState;
   if (lobbyContainer) renderLobby(lobbyContainer);
 
-  await supabase.from('sessions').update({ lobby_state: lobbyState }).eq('id', activeSession.id);
+  // If host hasn't usurped, auto-follow the winning vote
+  const dbUpdate = { lobby_state: lobbyState };
+  if (!hostUsurped && getSessionAdmin() === user.id && updates.workout_vote) {
+    const allMembers = activeSession.turn_order.map(uid => lobbyState.members?.[uid] || {});
+    const winningVote = getWinningVote(allMembers);
+    if (activeSession.workout_type !== winningVote) {
+      dbUpdate.workout_type = winningVote;
+      activeSession.workout_type = winningVote;
+    }
+  }
+
+  await supabase.from('sessions').update(dbUpdate).eq('id', activeSession.id);
 }
 
 /** Host starts the workout — transition lobby → active */
@@ -863,6 +967,7 @@ export function cleanupSession() {
   groupOwnerId = null;
   lobbyRendered = false;
   lobbyContainer = null;
+  hostUsurped = false;
   setLogs = [];
   timers = {};
 }

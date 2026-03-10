@@ -124,13 +124,7 @@ export function renderAuth(container) {
       <div class="splash-screen">
         <div class="splash-card">
           <div class="splash-logo">
-            <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
-              <rect x="8" y="16" width="48" height="36" rx="5" stroke="#FF9900" stroke-width="2.5" fill="none"/>
-              <circle cx="32" cy="34" r="12" stroke="#FF9900" stroke-width="2" fill="rgba(255,153,0,.08)"/>
-              <line x1="32" y1="22" x2="32" y2="46" stroke="#FF9900" stroke-width="1.5" stroke-dasharray="2 3"/>
-              <line x1="20" y1="34" x2="44" y2="34" stroke="#FF9900" stroke-width="1.5" stroke-dasharray="2 3"/>
-              <rect x="24" y="10" width="16" height="8" rx="3" stroke="#FF9900" stroke-width="2" fill="var(--panel)"/>
-            </svg>
+            <img src="icons/icon-192.png" alt="FubzLifts" style="width:96px;height:96px;border-radius:50%" />
           </div>
           <h1 class="splash-title">FubzLifts</h1>
           <p class="splash-sub">${isLogin

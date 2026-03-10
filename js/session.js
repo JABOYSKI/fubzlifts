@@ -630,6 +630,7 @@ async function adminStartSession(container) {
 
     const { error } = await supabase.from('sessions').update({
       status: 'active',
+      workout_type: activeSession.workout_type,
       current_exercise: exercises[0],
       current_turn_index: 0,
       current_set: 1,

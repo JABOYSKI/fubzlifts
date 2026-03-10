@@ -162,19 +162,30 @@ function subscribeToSession(container) {
   if (!visibilityHandler) {
     visibilityHandler = async () => {
       if (!activeSession || !lobbyContainer) return;
+      console.warn('[FubzLifts] Session resume handler fired');
 
-      const { data } = await supabase.from('sessions').select('*').eq('id', activeSession.id).single();
-      if (data) {
-        activeSession = data;
-        if (activeSession.status === 'lobby') {
-          renderLobby(lobbyContainer);
-        } else if (activeSession.status === 'active') {
-          renderSession(lobbyContainer);
+      try {
+        const { data, error } = await supabase.from('sessions').select('*').eq('id', activeSession.id).single();
+        console.warn('[FubzLifts] Session fetch:', error ? `ERROR: ${error.message}` : 'OK');
+        if (data) {
+          activeSession = data;
+          if (activeSession.status === 'lobby') {
+            renderLobby(lobbyContainer);
+          } else if (activeSession.status === 'active') {
+            renderSession(lobbyContainer);
+          }
         }
+      } catch (e) {
+        console.error('[FubzLifts] Session resume fetch exception:', e);
       }
-      if (realtimeChannel) supabase.removeChannel(realtimeChannel);
-      realtimeChannel = null;
-      setupRealtimeChannel(lobbyContainer);
+
+      try {
+        if (realtimeChannel) supabase.removeChannel(realtimeChannel);
+        realtimeChannel = null;
+        setupRealtimeChannel(lobbyContainer);
+      } catch (e) {
+        console.error('[FubzLifts] Realtime reconnect exception:', e);
+      }
     };
     window.addEventListener('app-resumed', visibilityHandler);
   }
@@ -513,6 +524,7 @@ function setupLobbyDelegation(container) {
   container._lobbyClickHandler = (e) => {
     const target = e.target.closest('button');
     if (!target) return;
+    console.warn('[FubzLifts] Lobby click:', target.id || target.className);
 
     // Vote workout type
     if (target.classList.contains('lobby-vote-workout')) {
@@ -626,43 +638,57 @@ async function updateMyLobbyState(updates) {
 
 /** Host starts the workout — transition lobby → active */
 async function adminStartSession(container) {
-  const exercises = WORKOUTS[activeSession.workout_type];
+  console.warn('[FubzLifts] adminStartSession called');
+  try {
+    const exercises = WORKOUTS[activeSession.workout_type];
 
-  const { error } = await supabase.from('sessions').update({
-    status: 'active',
-    current_exercise: exercises[0],
-    current_turn_index: 0,
-    current_set: 1,
-  }).eq('id', activeSession.id);
+    const { error } = await supabase.from('sessions').update({
+      status: 'active',
+      current_exercise: exercises[0],
+      current_turn_index: 0,
+      current_set: 1,
+    }).eq('id', activeSession.id);
 
-  if (error) toast('Failed to start workout: ' + error.message);
+    if (error) {
+      console.error('[FubzLifts] adminStartSession error:', error);
+      toast('Failed to start workout: ' + error.message);
+    } else {
+      console.warn('[FubzLifts] adminStartSession succeeded — waiting for realtime');
+    }
+  } catch (e) {
+    console.error('[FubzLifts] adminStartSession exception:', e);
+    toast('Failed to start workout — check connection');
+  }
   // The realtime subscription will pick up the status change and render
 }
 
 /** Leave the lobby and go back to groups */
-async function leaveLobby() {
+function leaveLobby() {
+  console.warn('[FubzLifts] leaveLobby called');
   const user = getUser();
+  const sessionId = activeSession.id;
+  const turnOrder = [...activeSession.turn_order];
+  const savedLobbyState = JSON.parse(JSON.stringify(activeSession.lobby_state || {}));
 
-  // Remove from turn order
-  const newOrder = activeSession.turn_order.filter(uid => uid !== user.id);
-  const lobbyState = { ...activeSession.lobby_state };
-  if (lobbyState.members) delete lobbyState.members[user.id];
+  // Navigate away IMMEDIATELY — don't wait for network
+  const cb = onSessionEnd;
+  cleanupSession();
+  if (cb) cb();
+
+  // Clean up server state in background (fire-and-forget)
+  const newOrder = turnOrder.filter(uid => uid !== user.id);
+  if (savedLobbyState.members) delete savedLobbyState.members[user.id];
 
   if (newOrder.length === 0) {
-    // Last person — delete the lobby session
-    await supabase.from('session_members').delete().eq('session_id', activeSession.id);
-    await supabase.from('sessions').delete().eq('id', activeSession.id);
+    supabase.from('session_members').delete().eq('session_id', sessionId)
+      .then(() => supabase.from('sessions').delete().eq('id', sessionId))
+      .catch(e => console.error('[FubzLifts] leaveLobby cleanup error:', e));
   } else {
-    await supabase.from('sessions').update({
-      turn_order: newOrder,
-      lobby_state: lobbyState,
-    }).eq('id', activeSession.id);
-    await supabase.from('session_members').delete()
-      .eq('session_id', activeSession.id).eq('user_id', user.id);
+    Promise.all([
+      supabase.from('sessions').update({ turn_order: newOrder, lobby_state: savedLobbyState }).eq('id', sessionId),
+      supabase.from('session_members').delete().eq('session_id', sessionId).eq('user_id', user.id),
+    ]).catch(e => console.error('[FubzLifts] leaveLobby cleanup error:', e));
   }
-
-  cleanupSession();
-  if (onSessionEnd) onSessionEnd();
 }
 
 // ─── ACTIVE SESSION ──────────────────────────────────────

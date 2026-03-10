@@ -309,8 +309,18 @@ export function renderGroups(container, onSelectGroup, onStartSession) {
     container.querySelector('#createGroupConfirm').addEventListener('click', async () => {
       const name = container.querySelector('#newGroupName').value.trim();
       if (!name) return toast('Enter a group name');
-      const group = await createGroup(name);
-      if (group) await load();
+      const btn = container.querySelector('#createGroupConfirm');
+      btn.disabled = true;
+      btn.textContent = 'Creating...';
+      try {
+        const group = await createGroup(name);
+        if (group) await load();
+      } catch (e) {
+        console.error('[FubzLifts] Create group error:', e);
+        toast('Failed to create group');
+      }
+      btn.disabled = false;
+      btn.textContent = 'Create';
     });
 
     // Join group
@@ -324,8 +334,18 @@ export function renderGroups(container, onSelectGroup, onStartSession) {
     container.querySelector('#joinGroupConfirm').addEventListener('click', async () => {
       const code = container.querySelector('#joinCodeInput').value.trim();
       if (!code) return toast('Enter a join code');
-      const group = await joinGroup(code);
-      if (group) await load();
+      const btn = container.querySelector('#joinGroupConfirm');
+      btn.disabled = true;
+      btn.textContent = 'Joining...';
+      try {
+        const group = await joinGroup(code);
+        if (group) await load();
+      } catch (e) {
+        console.error('[FubzLifts] Join group error:', e);
+        toast('Failed to join group');
+      }
+      btn.disabled = false;
+      btn.textContent = 'Join';
     });
 
     // Enter key on inputs

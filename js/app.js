@@ -95,9 +95,10 @@ function navigateTo(page) {
   }
 }
 
-// Re-render groups or profile after auth token is refreshed (fires from supabase.js)
+// Re-render groups or profile when tab resumes
 window.addEventListener('app-resumed', () => {
   if (!getUser()) return;
+  console.warn('[FubzLifts] app-resumed: currentPage =', currentPage);
   // Session view has its own resume handler — only handle groups & profile
   if (currentPage === 'groups') {
     currentGroupRef = renderGroups(
@@ -120,76 +121,104 @@ async function renderProfile() {
   const user = getUser();
   const container = document.getElementById('profileView');
 
-  // Load personal weights
-  const { data: weights } = await supabase
-    .from('profile_weights')
-    .select('*')
-    .eq('user_id', user.id);
-
+  // Show skeleton immediately so the page is never blank
   const exercises = ['squat', 'bench', 'ohp', 'row', 'deadlift'];
+  const cachedWeights = {}; // will be filled from DB
 
-  container.innerHTML = `
-    <div class="section">
-      <h2>Profile</h2>
-      <div class="card">
-        <div class="form-group">
-          <label>Alias</label>
-          <div style="font-size:16px;font-weight:600;color:var(--orange)">${esc(user.alias)}</div>
-        </div>
-        <div class="form-group">
-          <label>User ID</label>
-          <div class="muted" style="font-size:11px;word-break:break-all">${user.id}</div>
+  // Render immediately with defaults, then update with real data
+  function renderProfileHTML(weights) {
+    container.innerHTML = `
+      <div class="section">
+        <h2>Profile</h2>
+        <div class="card">
+          <div class="form-group">
+            <label>Alias</label>
+            <div style="font-size:16px;font-weight:600;color:var(--orange)">${esc(user.alias)}</div>
+          </div>
+          <div class="form-group">
+            <label>User ID</label>
+            <div class="muted" style="font-size:11px;word-break:break-all">${user.id}</div>
+          </div>
         </div>
       </div>
-    </div>
 
-    <div class="section">
-      <h3>My Weights</h3>
-      <div class="card">
-        ${exercises.map(ex => {
-          const w = (weights || []).find(r => r.exercise === ex);
-          const weight = w?.weight_lbs || 45;
-          return `
-            <div class="form-group" style="flex-direction:row;align-items:center;justify-content:space-between;gap:8px">
-              <label style="margin:0;min-width:100px">${EXERCISE_NAMES[ex]}</label>
-              <div style="display:flex;align-items:center;gap:6px">
-                <input type="number" class="field weight-input" data-exercise="${ex}"
-                  value="${weight}" min="0" step="5" style="width:80px;text-align:center" />
-                <span class="muted" style="font-size:12px">lbs</span>
+      <div class="section">
+        <h3>My Weights</h3>
+        <div class="card">
+          ${exercises.map(ex => {
+            const w = (weights || []).find(r => r.exercise === ex);
+            const weight = w?.weight_lbs || 45;
+            return `
+              <div class="form-group" style="flex-direction:row;align-items:center;justify-content:space-between;gap:8px">
+                <label style="margin:0;min-width:100px">${EXERCISE_NAMES[ex]}</label>
+                <div style="display:flex;align-items:center;gap:6px">
+                  <input type="number" class="field weight-input" data-exercise="${ex}"
+                    value="${weight}" min="0" step="5" style="width:80px;text-align:center" />
+                  <span class="muted" style="font-size:12px">lbs</span>
+                </div>
               </div>
-            </div>
-          `;
-        }).join('')}
-        <button class="btn btn-primary" id="saveWeightsBtn" style="margin-top:12px;width:100%">Save Weights</button>
+            `;
+          }).join('')}
+          <button class="btn btn-primary" id="saveWeightsBtn" style="margin-top:12px;width:100%">Save Weights</button>
+        </div>
       </div>
-    </div>
 
-    <button class="btn btn-danger" id="signOutBtn" style="margin-top:16px">Sign Out</button>
-  `;
+      <button class="btn btn-danger" id="signOutBtn" style="margin-top:16px">Sign Out</button>
+    `;
 
-  // Save weights
-  container.querySelector('#saveWeightsBtn').addEventListener('click', async () => {
-    const btn = container.querySelector('#saveWeightsBtn');
-    const inputs = container.querySelectorAll('.weight-input');
-    const rows = [];
-    inputs.forEach(input => {
-      rows.push({
-        user_id: user.id,
-        exercise: input.dataset.exercise,
-        weight_lbs: parseInt(input.value) || 45,
+    // Save weights
+    container.querySelector('#saveWeightsBtn').addEventListener('click', async () => {
+      const btn = container.querySelector('#saveWeightsBtn');
+      const inputs = container.querySelectorAll('.weight-input');
+      const rows = [];
+      inputs.forEach(input => {
+        rows.push({
+          user_id: user.id,
+          exercise: input.dataset.exercise,
+          weight_lbs: parseInt(input.value) || 45,
+        });
       });
+      btn.disabled = true;
+      btn.textContent = 'Saving...';
+      try {
+        const { error } = await supabase.from('profile_weights').upsert(rows);
+        if (error) { toast(error.message); return; }
+        toast('Weights saved!');
+        btn.textContent = '✓ Saved';
+        setTimeout(() => { btn.textContent = 'Save Weights'; btn.disabled = false; }, 1500);
+      } catch (e) {
+        console.error('[FubzLifts] Save weights error:', e);
+        toast('Save failed — try again');
+        btn.textContent = 'Save Weights';
+        btn.disabled = false;
+      }
     });
-    const { error } = await supabase.from('profile_weights').upsert(rows);
-    if (error) { toast(error.message); return; }
-    toast('Weights saved!');
-    btn.textContent = '✓ Saved';
-    setTimeout(() => { btn.textContent = 'Save Weights'; }, 1500);
-  });
 
-  container.querySelector('#signOutBtn').addEventListener('click', async () => {
-    await signOut();
-    showAuthScreen();
-  });
+    container.querySelector('#signOutBtn').addEventListener('click', async () => {
+      try {
+        await signOut();
+      } catch (e) {
+        console.error('[FubzLifts] Sign out error:', e);
+      }
+      showAuthScreen();
+    });
+  }
+
+  // Render with defaults first (never blank)
+  renderProfileHTML(null);
+
+  // Then fetch real weights and re-render
+  try {
+    const { data: weights } = await supabase
+      .from('profile_weights')
+      .select('*')
+      .eq('user_id', user.id);
+    if (weights && weights.length > 0) {
+      renderProfileHTML(weights);
+    }
+  } catch (e) {
+    console.error('[FubzLifts] Load weights error:', e);
+  }
 }
 
 function showNav() {

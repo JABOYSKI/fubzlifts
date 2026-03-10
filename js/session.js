@@ -17,6 +17,8 @@ let realtimeChannel = null;
 let onSessionEnd = null;
 
 let groupOwnerId = null; // the group's actual owner
+let visibilityHandler = null; // track the handler so we can remove it on cleanup
+let lobbyContainer = null; // ref for visibility reconnect
 
 /** Determine who is the session admin (host).
  *  Priority: group owner if present, otherwise first in turn_order. */
@@ -63,7 +65,7 @@ export async function startSession(groupId, container, onEnd) {
       const newOrder = [...activeSession.turn_order, user.id];
       const lobbyState = activeSession.lobby_state || { members: {} };
       if (activeSession.status === 'lobby' && !lobbyState.members[user.id]) {
-        lobbyState.members[user.id] = { workout_vote: 'A', dl_sets_vote: 1, ready: false };
+        lobbyState.members[user.id] = { workout_vote: 'A', ready: false };
       }
       await supabase.from('sessions').update({
         turn_order: newOrder,
@@ -76,7 +78,7 @@ export async function startSession(groupId, container, onEnd) {
     // Create new lobby session
     const lobbyState = {
       members: {
-        [user.id]: { workout_vote: 'A', dl_sets_vote: 1, ready: false }
+        [user.id]: { workout_vote: 'A', ready: false }
       },
       dl_sets: 1,
     };
@@ -150,12 +152,40 @@ async function loadSessionState(container) {
   renderSession(container);
 }
 
-/** Subscribe to real-time session updates */
+/** Subscribe to real-time session updates + visibility reconnect */
 function subscribeToSession(container) {
   if (realtimeChannel) supabase.removeChannel(realtimeChannel);
+  lobbyContainer = container;
 
+  // Reconnect realtime when tab becomes visible again (fixes alt-tab issue)
+  if (!visibilityHandler) {
+    visibilityHandler = async () => {
+      if (document.visibilityState === 'visible' && activeSession && lobbyContainer) {
+        const { data } = await supabase.from('sessions').select('*').eq('id', activeSession.id).single();
+        if (data) {
+          activeSession = data;
+          if (activeSession.status === 'lobby') {
+            lobbyRendered = false;
+            renderLobby(lobbyContainer);
+          } else if (activeSession.status === 'active') {
+            renderSession(lobbyContainer);
+          }
+        }
+        if (realtimeChannel) supabase.removeChannel(realtimeChannel);
+        realtimeChannel = null;
+        setupRealtimeChannel(lobbyContainer);
+      }
+    };
+    document.addEventListener('visibilitychange', visibilityHandler);
+  }
+
+  setupRealtimeChannel(container);
+}
+
+/** Wire up the Supabase realtime channel (separated so visibility handler can reconnect) */
+function setupRealtimeChannel(container) {
   realtimeChannel = supabase
-    .channel(`session_${activeSession.id}`)
+    .channel(`session_${activeSession.id}_${Date.now()}`)
     .on('postgres_changes', {
       event: '*',
       schema: 'public',
@@ -167,11 +197,10 @@ function subscribeToSession(container) {
       activeSession = payload.new;
 
       if (activeSession.status === 'completed') {
-        // Session ended — show summary for everyone
         clearInterval(timerInterval);
         renderSessionSummary(container);
       } else if (activeSession.status === 'active' && prevStatus === 'lobby') {
-        // Lobby → active transition — start the session
+        lobbyRendered = false;
         await loadSessionState(container);
       } else if (activeSession.status === 'active') {
         renderSession(container);
@@ -215,7 +244,9 @@ function subscribeToSession(container) {
 
 // ─── LOBBY ───────────────────────────────────────────────
 
-/** Render the pre-session lobby */
+let lobbyRendered = false; // track if lobby skeleton is already in DOM
+
+/** Render the pre-session lobby — uses DOM patching to avoid full re-renders */
 function renderLobby(container) {
   if (!activeSession || activeSession.status !== 'lobby') return;
 
@@ -223,7 +254,7 @@ function renderLobby(container) {
   const lobbyState = activeSession.lobby_state || { members: {} };
   const adminId = getSessionAdmin();
   const isHost = adminId === user.id;
-  const myVote = lobbyState.members?.[user.id] || { workout_vote: 'A', dl_sets_vote: 1, ready: false };
+  const myVote = lobbyState.members?.[user.id] || { workout_vote: 'A', ready: false };
 
   const allMembers = activeSession.turn_order.map(uid => {
     const member = sessionMembers.find(m => m.id === uid);
@@ -234,145 +265,207 @@ function renderLobby(container) {
   const readyCount = allMembers.filter(m => m.ready).length;
   const allReady = allMembers.length > 0 && allMembers.every(m => m.ready);
 
-  // Count votes for display
   const aVotes = allMembers.filter(m => m.workout_vote === 'A').length;
   const bVotes = allMembers.filter(m => m.workout_vote === 'B').length;
 
+  // If already rendered, patch in-place instead of full innerHTML swap
+  if (lobbyRendered && container.querySelector('#lobbyRoot')) {
+    patchLobby(container, { myVote, allMembers, adminId, isHost, readyCount, allReady, aVotes, bVotes, lobbyState });
+    return;
+  }
+
+  lobbyRendered = true;
+
   container.innerHTML = `
-    <div class="exercise-banner">
-      <div class="exercise-name">Workout Lobby</div>
-      <div class="exercise-meta">${allMembers.length} member${allMembers.length !== 1 ? 's' : ''} · ${readyCount} ready</div>
-    </div>
-
-    <!-- Your preferences -->
-    <div class="card" style="margin-top:16px">
-      <div style="font-size:12px;color:var(--muted-color);text-transform:uppercase;letter-spacing:.6px;font-weight:600;margin-bottom:10px">Your Vote</div>
-      <div class="form-group">
-        <label>Workout Type</label>
-        <div class="btn-group">
-          <button class="btn ${myVote.workout_vote === 'A' ? 'btn-primary' : ''} lobby-vote-workout" data-type="A">
-            A — Squat/Bench/Row
-          </button>
-          <button class="btn ${myVote.workout_vote === 'B' ? 'btn-primary' : ''} lobby-vote-workout" data-type="B">
-            B — Squat/OHP/DL
-          </button>
-        </div>
-        <div class="muted" style="font-size:11px;margin-top:4px">Votes: A(${aVotes}) · B(${bVotes})</div>
+    <div id="lobbyRoot">
+      <div class="exercise-banner">
+        <div class="exercise-name">Workout Lobby</div>
+        <div class="exercise-meta" id="lobbyMeta">${allMembers.length} member${allMembers.length !== 1 ? 's' : ''} · ${readyCount} ready</div>
       </div>
-      <div class="form-group">
-        <label>Deadlift Sets</label>
-        <div class="btn-group">
-          ${[1,2,3,4,5].map(n => `
-            <button class="btn ${myVote.dl_sets_vote === n ? 'btn-primary' : ''} lobby-vote-dl" data-sets="${n}">${n}</button>
-          `).join('')}
+
+      <!-- Your preferences -->
+      <div class="card" style="margin-top:16px">
+        <div style="font-size:12px;color:var(--muted-color);text-transform:uppercase;letter-spacing:.6px;font-weight:600;margin-bottom:10px">Your Vote</div>
+        <div class="form-group">
+          <label>Workout Type</label>
+          <div class="btn-group" id="lobbyWorkoutBtns">
+            <button class="btn ${myVote.workout_vote === 'A' ? 'btn-primary' : ''} lobby-vote-workout" data-type="A">
+              A — Squat/Bench/Row
+            </button>
+            <button class="btn ${myVote.workout_vote === 'B' ? 'btn-primary' : ''} lobby-vote-workout" data-type="B">
+              B — Squat/OHP/DL
+            </button>
+          </div>
+          <div class="muted" style="font-size:11px;margin-top:4px" id="lobbyVoteTally">Votes: A(${aVotes}) · B(${bVotes})</div>
+        </div>
+        <button class="btn ${myVote.ready ? 'btn-primary' : 'btn-secondary'}" id="lobbyReadyBtn" style="margin-top:12px;width:100%">
+          ${myVote.ready ? '✓ Ready — Tap to Unready' : 'Ready Up'}
+        </button>
+      </div>
+
+      <!-- Members list -->
+      <div class="section" style="margin-top:16px">
+        <h3>Members</h3>
+        <div id="lobbyMembersList">
+          ${renderMemberCards(allMembers, adminId)}
         </div>
       </div>
-      <button class="btn ${myVote.ready ? 'btn-primary' : 'btn-secondary'}" id="lobbyReadyBtn" style="margin-top:12px;width:100%">
-        ${myVote.ready ? '✓ Ready — Tap to Unready' : 'Ready Up'}
-      </button>
-    </div>
 
-    <!-- Members list -->
-    <div class="section" style="margin-top:16px">
-      <h3>Members</h3>
-      ${allMembers.map(m => `
-        <div class="card" style="margin-bottom:6px">
-          <div class="card-row">
-            <div class="card-info">
-              <div class="card-title">
-                ${esc(m.alias)}
-                ${m.uid === adminId ? '<span class="muted" style="font-size:11px"> (host)</span>' : ''}
-              </div>
-              <div class="card-subtitle muted">
-                Vote: <strong>${m.workout_vote || '?'}</strong> · DL: <strong>${m.dl_sets_vote || '?'}</strong>×5
-              </div>
-            </div>
-            <div style="font-size:22px;color:${m.ready ? 'var(--teal)' : 'var(--muted-color)'}">${m.ready ? '✓' : '○'}</div>
+      <div id="lobbyHostArea">
+        ${renderHostArea(isHost, allReady, readyCount, allMembers.length, lobbyState)}
+      </div>
+
+      <button class="btn" id="lobbyLeaveBtn" style="margin-top:16px;width:100%">Leave Lobby</button>
+    </div>
+  `;
+
+  bindLobbyEvents(container, myVote);
+}
+
+/** Render member cards HTML */
+function renderMemberCards(allMembers, adminId) {
+  return allMembers.map(m => `
+    <div class="card" style="margin-bottom:6px">
+      <div class="card-row">
+        <div class="card-info">
+          <div class="card-title">
+            ${esc(m.alias)}
+            ${m.uid === adminId ? '<span class="muted" style="font-size:11px"> (host)</span>' : ''}
+          </div>
+          <div class="card-subtitle muted">
+            Vote: <strong>${m.workout_vote || '?'}</strong>
           </div>
         </div>
-      `).join('')}
+        <div style="font-size:22px;color:${m.ready ? 'var(--teal)' : 'var(--muted-color)'}">${m.ready ? '✓' : '○'}</div>
+      </div>
     </div>
+  `).join('');
+}
 
-    ${isHost ? `
-      <!-- Host controls -->
+/** Render host controls area HTML */
+function renderHostArea(isHost, allReady, readyCount, totalMembers, lobbyState) {
+  if (isHost) {
+    return `
       <div class="card" style="border:1px solid var(--orange);margin-top:16px">
         <div style="font-size:12px;color:var(--orange);text-transform:uppercase;letter-spacing:.6px;font-weight:600;margin-bottom:10px">Host Controls</div>
         <div class="form-group">
-          <label>Final Workout</label>
-          <div class="btn-group">
+          <label>Workout Type</label>
+          <div class="btn-group" id="adminWorkoutBtns">
             <button class="btn ${activeSession.workout_type === 'A' ? 'btn-primary' : ''} admin-set-workout" data-type="A">A</button>
             <button class="btn ${activeSession.workout_type === 'B' ? 'btn-primary' : ''} admin-set-workout" data-type="B">B</button>
           </div>
         </div>
         <div class="form-group">
-          <label>Final Deadlift Sets</label>
-          <div class="btn-group">
+          <label>Deadlift Sets</label>
+          <div class="btn-group" id="adminDlBtns">
             ${[1,2,3,4,5].map(n => `
               <button class="btn ${(lobbyState.dl_sets || 1) === n ? 'btn-primary' : ''} admin-set-dl" data-sets="${n}">${n}</button>
             `).join('')}
           </div>
         </div>
         <button class="btn btn-primary btn-large" id="lobbyStartBtn" style="margin-top:12px;width:100%" ${allReady ? '' : 'disabled'}>
-          Start Workout (${readyCount}/${allMembers.length} ready)
+          Start Workout (${readyCount}/${totalMembers} ready)
         </button>
       </div>
-    ` : `
-      <div class="card" style="margin-top:16px">
-        <div class="muted" style="text-align:center;padding:8px 0">
-          Waiting for host to start... (${readyCount}/${allMembers.length} ready)
-        </div>
+    `;
+  }
+  return `
+    <div class="card" style="margin-top:16px">
+      <div class="muted" style="text-align:center;padding:8px 0" id="lobbyWaitMsg">
+        Waiting for host to start... (${readyCount}/${totalMembers} ready)
       </div>
-    `}
-
-    <button class="btn" id="lobbyLeaveBtn" style="margin-top:16px;width:100%">Leave Lobby</button>
+    </div>
   `;
+}
 
-  // ── Event handlers ──
+/** Patch lobby DOM in-place without full re-render */
+function patchLobby(container, state) {
+  const { myVote, allMembers, adminId, isHost, readyCount, allReady, aVotes, bVotes, lobbyState } = state;
 
+  // Patch meta
+  const meta = container.querySelector('#lobbyMeta');
+  if (meta) meta.textContent = `${allMembers.length} member${allMembers.length !== 1 ? 's' : ''} · ${readyCount} ready`;
+
+  // Patch vote buttons highlight
+  container.querySelectorAll('.lobby-vote-workout').forEach(btn => {
+    btn.classList.toggle('btn-primary', btn.dataset.type === myVote.workout_vote);
+  });
+
+  // Patch vote tally
+  const tally = container.querySelector('#lobbyVoteTally');
+  if (tally) tally.textContent = `Votes: A(${aVotes}) · B(${bVotes})`;
+
+  // Patch ready button
+  const readyBtn = container.querySelector('#lobbyReadyBtn');
+  if (readyBtn) {
+    readyBtn.classList.toggle('btn-primary', !!myVote.ready);
+    readyBtn.classList.toggle('btn-secondary', !myVote.ready);
+    readyBtn.textContent = myVote.ready ? '✓ Ready — Tap to Unready' : 'Ready Up';
+  }
+
+  // Patch members list
+  const membersList = container.querySelector('#lobbyMembersList');
+  if (membersList) membersList.innerHTML = renderMemberCards(allMembers, adminId);
+
+  // Patch host area — must rebind events if host area structure changed
+  const hostArea = container.querySelector('#lobbyHostArea');
+  if (hostArea) {
+    const newHTML = renderHostArea(isHost, allReady, readyCount, allMembers.length, lobbyState);
+    hostArea.innerHTML = newHTML;
+    bindHostEvents(container);
+  }
+}
+
+/** Bind all lobby event handlers */
+function bindLobbyEvents(container, myVote) {
   // Vote workout type
   container.querySelectorAll('.lobby-vote-workout').forEach(btn => {
     btn.addEventListener('click', () => updateMyLobbyState({ workout_vote: btn.dataset.type }));
   });
 
-  // Vote DL sets
-  container.querySelectorAll('.lobby-vote-dl').forEach(btn => {
-    btn.addEventListener('click', () => updateMyLobbyState({ dl_sets_vote: parseInt(btn.dataset.sets) }));
-  });
-
   // Ready toggle
   container.querySelector('#lobbyReadyBtn').addEventListener('click', () => {
-    updateMyLobbyState({ ready: !myVote.ready });
+    const currentVote = activeSession.lobby_state?.members?.[getUser().id] || {};
+    updateMyLobbyState({ ready: !currentVote.ready });
   });
 
-  // Host: set final workout
+  // Host events
+  bindHostEvents(container);
+
+  // Leave lobby
+  container.querySelector('#lobbyLeaveBtn').addEventListener('click', () => leaveLobby());
+}
+
+/** Bind host-only event handlers (called on initial render and on patch) */
+function bindHostEvents(container) {
   container.querySelectorAll('.admin-set-workout').forEach(btn => {
     btn.addEventListener('click', async () => {
       await supabase.from('sessions').update({ workout_type: btn.dataset.type }).eq('id', activeSession.id);
     });
   });
 
-  // Host: set final DL sets
   container.querySelectorAll('.admin-set-dl').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const lobbyState = { ...activeSession.lobby_state, dl_sets: parseInt(btn.dataset.sets) };
-      await supabase.from('sessions').update({ lobby_state: lobbyState }).eq('id', activeSession.id);
+      const ls = { ...activeSession.lobby_state, dl_sets: parseInt(btn.dataset.sets) };
+      await supabase.from('sessions').update({ lobby_state: ls }).eq('id', activeSession.id);
     });
   });
 
-  // Host: start session
   container.querySelector('#lobbyStartBtn')?.addEventListener('click', () => adminStartSession(container));
-
-  // Leave lobby
-  container.querySelector('#lobbyLeaveBtn').addEventListener('click', () => leaveLobby());
 }
 
-/** Update this user's lobby state (vote/ready) */
+/** Update this user's lobby state (vote/ready) — optimistic local update */
 async function updateMyLobbyState(updates) {
   const user = getUser();
   const lobbyState = { ...activeSession.lobby_state };
   if (!lobbyState.members) lobbyState.members = {};
   if (!lobbyState.members[user.id]) lobbyState.members[user.id] = {};
   Object.assign(lobbyState.members[user.id], updates);
+
+  // Optimistic: update local state and patch UI immediately
+  activeSession.lobby_state = lobbyState;
+  if (lobbyContainer) renderLobby(lobbyContainer);
+
   await supabase.from('sessions').update({ lobby_state: lobbyState }).eq('id', activeSession.id);
 }
 
@@ -761,8 +854,15 @@ function renderSessionSummary(container) {
 export function cleanupSession() {
   clearInterval(timerInterval);
   if (realtimeChannel) supabase.removeChannel(realtimeChannel);
+  if (visibilityHandler) {
+    document.removeEventListener('visibilitychange', visibilityHandler);
+    visibilityHandler = null;
+  }
+  realtimeChannel = null;
   activeSession = null;
   groupOwnerId = null;
+  lobbyRendered = false;
+  lobbyContainer = null;
   setLogs = [];
   timers = {};
 }

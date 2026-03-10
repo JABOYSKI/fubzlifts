@@ -325,21 +325,58 @@ function renderLobby(container) {
 /** Render member cards HTML */
 function renderMemberCards(allMembers, adminId) {
   return allMembers.map(m => `
-    <div class="card" style="margin-bottom:6px">
+    <div class="card lobby-member-card" data-uid="${m.uid}" style="margin-bottom:6px">
       <div class="card-row">
         <div class="card-info">
-          <div class="card-title">
+          <div class="card-title lobby-member-name">
             ${esc(m.alias)}
             ${m.uid === adminId ? '<span class="muted" style="font-size:11px"> (host)</span>' : ''}
           </div>
-          <div class="card-subtitle muted">
+          <div class="card-subtitle muted lobby-member-vote">
             Vote: <strong>${m.workout_vote || '?'}</strong>
           </div>
         </div>
-        <div style="font-size:22px;color:${m.ready ? 'var(--teal)' : 'var(--muted-color)'}">${m.ready ? '✓' : '○'}</div>
+        <div class="lobby-member-ready" style="font-size:22px;color:${m.ready ? 'var(--teal)' : 'var(--muted-color)'}">${m.ready ? '✓' : '○'}</div>
       </div>
     </div>
   `).join('');
+}
+
+/** Patch member cards in-place, only rebuilding if member count changed */
+function patchMemberCards(container, allMembers, adminId) {
+  const list = container.querySelector('#lobbyMembersList');
+  if (!list) return;
+
+  const existing = list.querySelectorAll('.lobby-member-card');
+  // If member count changed, rebuild the list
+  if (existing.length !== allMembers.length) {
+    list.innerHTML = renderMemberCards(allMembers, adminId);
+    return;
+  }
+
+  // Patch each card in-place
+  allMembers.forEach((m, i) => {
+    const card = existing[i];
+    if (!card) return;
+
+    const nameEl = card.querySelector('.lobby-member-name');
+    if (nameEl) {
+      const newName = `${esc(m.alias)}${m.uid === adminId ? '<span class="muted" style="font-size:11px"> (host)</span>' : ''}`;
+      if (nameEl.innerHTML !== newName) nameEl.innerHTML = newName;
+    }
+
+    const voteEl = card.querySelector('.lobby-member-vote');
+    if (voteEl) {
+      const newVote = `Vote: <strong>${m.workout_vote || '?'}</strong>`;
+      if (voteEl.innerHTML !== newVote) voteEl.innerHTML = newVote;
+    }
+
+    const readyEl = card.querySelector('.lobby-member-ready');
+    if (readyEl) {
+      readyEl.style.color = m.ready ? 'var(--teal)' : 'var(--muted-color)';
+      readyEl.textContent = m.ready ? '✓' : '○';
+    }
+  });
 }
 
 /** Get the winning workout vote (A or B), defaulting to A on tie */
@@ -422,9 +459,8 @@ function patchLobby(container, state) {
     readyBtn.textContent = myVote.ready ? '✓ Ready — Tap to Unready' : 'Ready Up';
   }
 
-  // Patch members list
-  const membersList = container.querySelector('#lobbyMembersList');
-  if (membersList) membersList.innerHTML = renderMemberCards(allMembers, adminId);
+  // Patch members list in-place
+  patchMemberCards(container, allMembers, adminId);
 
   // Patch host area in-place
   if (isHost) {

@@ -11,11 +11,13 @@ async function init() {
   const user = await initAuth();
 
   onAuthChange((user, event) => {
-    if (user) {
+    // Only react to actual sign-in/sign-out, not token refreshes
+    if (event === 'SIGNED_IN') {
       renderApp();
-    } else {
+    } else if (event === 'SIGNED_OUT') {
       showAuthScreen();
     }
+    // Ignore TOKEN_REFRESHED, USER_UPDATED, etc. — they don't need a full re-render
   });
 
   if (user) {

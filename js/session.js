@@ -391,7 +391,7 @@ function renderHostArea(isHost, allReady, readyCount, totalMembers, lobbyState, 
             </div>
           </div>
         </div>
-        <div class="form-group">
+        <div class="form-group" id="adminDlGroup" style="${currentType === 'B' ? '' : 'display:none'}">
           <label>Deadlift Sets</label>
           <div class="btn-group" id="adminDlBtns">
             ${[1,2,3,4,5].map(n => `
@@ -449,6 +449,9 @@ function patchLobby(container, state) {
     container.querySelectorAll('.admin-set-workout').forEach(btn => {
       btn.classList.toggle('btn-primary', btn.dataset.type === currentType);
     });
+    // Show/hide DL sets based on workout type
+    const dlGroup = container.querySelector('#adminDlGroup');
+    if (dlGroup) dlGroup.style.display = currentType === 'B' ? '' : 'none';
     // Patch admin DL buttons
     container.querySelectorAll('.admin-set-dl').forEach(btn => {
       btn.classList.toggle('btn-primary', parseInt(btn.dataset.sets) === (lobbyState.dl_sets || 1));
@@ -466,6 +469,7 @@ function patchLobby(container, state) {
       container.querySelectorAll('.admin-set-workout').forEach(btn => {
         btn.classList.toggle('btn-primary', btn.dataset.type === winningVote);
       });
+      if (dlGroup) dlGroup.style.display = winningVote === 'B' ? '' : 'none';
       supabase.from('sessions').update({ workout_type: winningVote }).eq('id', activeSession.id);
     }
   } else {
@@ -526,6 +530,12 @@ function setupLobbyDelegation(container) {
         if (confirm) confirm.style.display = 'block';
       } else {
         hostUsurped = false;
+        activeSession.workout_type = type;
+        container.querySelectorAll('.admin-set-workout').forEach(b => {
+          b.classList.toggle('btn-primary', b.dataset.type === type);
+        });
+        const dlG = container.querySelector('#adminDlGroup');
+        if (dlG) dlG.style.display = type === 'B' ? '' : 'none';
         supabase.from('sessions').update({ workout_type: type }).eq('id', activeSession.id);
       }
       return;
@@ -535,9 +545,17 @@ function setupLobbyDelegation(container) {
     if (target.id === 'usurpYes') {
       if (pendingUsurpType) {
         hostUsurped = true;
-        supabase.from('sessions').update({ workout_type: pendingUsurpType }).eq('id', activeSession.id);
+        activeSession.workout_type = pendingUsurpType;
         const confirm = container.querySelector('#usurpConfirm');
         if (confirm) confirm.style.display = 'none';
+        // Update admin workout buttons immediately
+        container.querySelectorAll('.admin-set-workout').forEach(btn => {
+          btn.classList.toggle('btn-primary', btn.dataset.type === pendingUsurpType);
+        });
+        // Show/hide DL sets based on new type
+        const dlGroup = container.querySelector('#adminDlGroup');
+        if (dlGroup) dlGroup.style.display = pendingUsurpType === 'B' ? '' : 'none';
+        supabase.from('sessions').update({ workout_type: pendingUsurpType }).eq('id', activeSession.id);
         pendingUsurpType = null;
       }
       return;

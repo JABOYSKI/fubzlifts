@@ -27,6 +27,9 @@ document.addEventListener('visibilitychange', () => {
   } else if (wasHidden) {
     // Tab just became visible after being hidden — reload
     wasHidden = false;
+    // Hide instantly before reload so there's no visible flash
+    document.body.style.transition = 'none';
+    document.body.style.opacity = '0';
     window.location.reload();
   }
 });

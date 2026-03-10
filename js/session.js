@@ -158,36 +158,23 @@ function subscribeToSession(container) {
   if (realtimeChannel) supabase.removeChannel(realtimeChannel);
   lobbyContainer = container;
 
-  // Reconnect realtime after auth token is refreshed (fires from supabase.js)
+  // Reconnect realtime when tab becomes visible (WebSocket may have dropped)
   if (!visibilityHandler) {
-    visibilityHandler = async () => {
+    visibilityHandler = () => {
+      if (document.visibilityState !== 'visible') return;
       if (!activeSession || !lobbyContainer) return;
-      console.warn('[FubzLifts] Session resume handler fired');
-
-      try {
-        const { data, error } = await supabase.from('sessions').select('*').eq('id', activeSession.id).single();
-        console.warn('[FubzLifts] Session fetch:', error ? `ERROR: ${error.message}` : 'OK');
-        if (data) {
-          activeSession = data;
-          if (activeSession.status === 'lobby') {
-            renderLobby(lobbyContainer);
-          } else if (activeSession.status === 'active') {
-            renderSession(lobbyContainer);
-          }
-        }
-      } catch (e) {
-        console.error('[FubzLifts] Session resume fetch exception:', e);
-      }
-
+      // Only reconnect the realtime channel — do NOT re-render.
+      // Existing DOM + event handlers are still valid.
+      // The fresh channel will deliver any missed updates and trigger renders naturally.
       try {
         if (realtimeChannel) supabase.removeChannel(realtimeChannel);
         realtimeChannel = null;
         setupRealtimeChannel(lobbyContainer);
       } catch (e) {
-        console.error('[FubzLifts] Realtime reconnect exception:', e);
+        console.error('[FubzLifts] Realtime reconnect error:', e);
       }
     };
-    window.addEventListener('app-resumed', visibilityHandler);
+    document.addEventListener('visibilitychange', visibilityHandler);
   }
 
   setupRealtimeChannel(container);
@@ -1037,7 +1024,7 @@ export function cleanupSession() {
   clearInterval(timerInterval);
   if (realtimeChannel) supabase.removeChannel(realtimeChannel);
   if (visibilityHandler) {
-    window.removeEventListener('app-resumed', visibilityHandler);
+    document.removeEventListener('visibilitychange', visibilityHandler);
     visibilityHandler = null;
   }
   // Remove delegated click handler

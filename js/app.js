@@ -6,6 +6,7 @@ import { supabase } from './supabase.js';
 import { showView, toast, EXERCISE_NAMES } from './utils.js';
 
 let currentGroupRef = null;
+let currentPage = null;
 
 async function init() {
   const user = await initAuth();
@@ -70,6 +71,7 @@ function renderApp() {
 
 function navigateTo(page) {
   cleanupSession();
+  currentPage = page;
 
   // Update nav tabs
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.page === page));
@@ -80,6 +82,7 @@ function navigateTo(page) {
       document.getElementById('groupsView'),
       (groupId) => { /* group detail — future */ },
       (groupId) => {
+        currentPage = 'session';
         showView('sessionView');
         startSession(groupId, document.getElementById('sessionView'), () => {
           navigateTo('groups');
@@ -91,6 +94,27 @@ function navigateTo(page) {
     renderProfile();
   }
 }
+
+// Re-render groups or profile when tab resumes (fixes stale handlers after minimize)
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !getUser()) return;
+  // Session view has its own visibility handler — only handle groups & profile
+  if (currentPage === 'groups') {
+    currentGroupRef = renderGroups(
+      document.getElementById('groupsView'),
+      (groupId) => { /* group detail — future */ },
+      (groupId) => {
+        currentPage = 'session';
+        showView('sessionView');
+        startSession(groupId, document.getElementById('sessionView'), () => {
+          navigateTo('groups');
+        });
+      }
+    );
+  } else if (currentPage === 'profile') {
+    renderProfile();
+  }
+});
 
 async function renderProfile() {
   const user = getUser();

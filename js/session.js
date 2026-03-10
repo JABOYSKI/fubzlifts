@@ -321,7 +321,7 @@ function renderLobby(container) {
     </div>
   `;
 
-  bindLobbyEvents(container, myVote);
+  setupLobbyDelegation(container);
 }
 
 /** Render member cards HTML */
@@ -389,6 +389,7 @@ function getWinningVote(allMembers) {
 }
 
 let hostUsurped = false; // tracks whether host manually overrode the vote
+let pendingUsurpType = null; // for host override confirmation flow
 
 /** Render host controls area HTML */
 function renderHostArea(isHost, allReady, readyCount, totalMembers, lobbyState, allMembers) {
@@ -504,33 +505,33 @@ function patchLobby(container, state) {
   }
 }
 
-/** Bind all lobby event handlers */
-function bindLobbyEvents(container, myVote) {
-  // Vote workout type
-  container.querySelectorAll('.lobby-vote-workout').forEach(btn => {
-    btn.addEventListener('click', () => updateMyLobbyState({ workout_vote: btn.dataset.type }));
-  });
+/** Set up event delegation for all lobby clicks — survives DOM patching */
+function setupLobbyDelegation(container) {
+  // Remove previous handler if any (idempotent)
+  if (container._lobbyClickHandler) {
+    container.removeEventListener('click', container._lobbyClickHandler);
+  }
 
-  // Ready toggle
-  container.querySelector('#lobbyReadyBtn').addEventListener('click', () => {
-    const currentVote = activeSession.lobby_state?.members?.[getUser().id] || {};
-    updateMyLobbyState({ ready: !currentVote.ready });
-  });
+  container._lobbyClickHandler = (e) => {
+    const target = e.target.closest('button');
+    if (!target) return;
 
-  // Host events
-  bindHostEvents(container);
+    // Vote workout type
+    if (target.classList.contains('lobby-vote-workout')) {
+      updateMyLobbyState({ workout_vote: target.dataset.type });
+      return;
+    }
 
-  // Leave lobby
-  container.querySelector('#lobbyLeaveBtn').addEventListener('click', () => leaveLobby());
-}
+    // Ready toggle
+    if (target.id === 'lobbyReadyBtn') {
+      const currentVote = activeSession.lobby_state?.members?.[getUser().id] || {};
+      updateMyLobbyState({ ready: !currentVote.ready });
+      return;
+    }
 
-/** Bind host-only event handlers (called on initial render and on patch) */
-function bindHostEvents(container) {
-  let pendingUsurpType = null;
-
-  container.querySelectorAll('.admin-set-workout').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const type = btn.dataset.type;
+    // Admin set workout type
+    if (target.classList.contains('admin-set-workout')) {
+      const type = target.dataset.type;
       const lobbyState = activeSession.lobby_state || { members: {} };
       const allMembers = activeSession.turn_order.map(uid => {
         const vote = lobbyState.members?.[uid] || {};
@@ -542,47 +543,61 @@ function bindHostEvents(container) {
       })));
 
       if (type !== winningVote) {
-        // Show usurp confirmation
         pendingUsurpType = type;
         const confirm = container.querySelector('#usurpConfirm');
         if (confirm) confirm.style.display = 'block';
       } else {
-        // Matches vote — just set it, clear usurp
         hostUsurped = false;
         supabase.from('sessions').update({ workout_type: type }).eq('id', activeSession.id);
       }
-    });
-  });
+      return;
+    }
 
-  container.querySelector('#usurpYes')?.addEventListener('click', async () => {
-    if (pendingUsurpType) {
-      hostUsurped = true;
-      await supabase.from('sessions').update({ workout_type: pendingUsurpType }).eq('id', activeSession.id);
+    // Usurp yes
+    if (target.id === 'usurpYes') {
+      if (pendingUsurpType) {
+        hostUsurped = true;
+        supabase.from('sessions').update({ workout_type: pendingUsurpType }).eq('id', activeSession.id);
+        const confirm = container.querySelector('#usurpConfirm');
+        if (confirm) confirm.style.display = 'none';
+        pendingUsurpType = null;
+      }
+      return;
+    }
+
+    // Usurp no
+    if (target.id === 'usurpNo') {
+      pendingUsurpType = null;
       const confirm = container.querySelector('#usurpConfirm');
       if (confirm) confirm.style.display = 'none';
-      pendingUsurpType = null;
+      return;
     }
-  });
 
-  container.querySelector('#usurpNo')?.addEventListener('click', () => {
-    pendingUsurpType = null;
-    const confirm = container.querySelector('#usurpConfirm');
-    if (confirm) confirm.style.display = 'none';
-  });
-
-  container.querySelectorAll('.admin-set-dl').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const ls = { ...activeSession.lobby_state, dl_sets: parseInt(btn.dataset.sets) };
-      // Optimistic local update
+    // Admin DL sets
+    if (target.classList.contains('admin-set-dl')) {
+      const ls = { ...activeSession.lobby_state, dl_sets: parseInt(target.dataset.sets) };
       activeSession.lobby_state = ls;
       container.querySelectorAll('.admin-set-dl').forEach(b => {
-        b.classList.toggle('btn-primary', parseInt(b.dataset.sets) === parseInt(btn.dataset.sets));
+        b.classList.toggle('btn-primary', parseInt(b.dataset.sets) === parseInt(target.dataset.sets));
       });
-      await supabase.from('sessions').update({ lobby_state: ls }).eq('id', activeSession.id);
-    });
-  });
+      supabase.from('sessions').update({ lobby_state: ls }).eq('id', activeSession.id);
+      return;
+    }
 
-  container.querySelector('#lobbyStartBtn')?.addEventListener('click', () => adminStartSession(container));
+    // Start workout
+    if (target.id === 'lobbyStartBtn') {
+      adminStartSession(container);
+      return;
+    }
+
+    // Leave lobby
+    if (target.id === 'lobbyLeaveBtn') {
+      leaveLobby();
+      return;
+    }
+  };
+
+  container.addEventListener('click', container._lobbyClickHandler);
 }
 
 /** Update this user's lobby state (vote/ready) — optimistic local update */
@@ -615,13 +630,14 @@ async function updateMyLobbyState(updates) {
 async function adminStartSession(container) {
   const exercises = WORKOUTS[activeSession.workout_type];
 
-  await supabase.from('sessions').update({
+  const { error } = await supabase.from('sessions').update({
     status: 'active',
     current_exercise: exercises[0],
     current_turn_index: 0,
     current_set: 1,
   }).eq('id', activeSession.id);
 
+  if (error) toast('Failed to start workout: ' + error.message);
   // The realtime subscription will pick up the status change and render
 }
 
@@ -1000,12 +1016,18 @@ export function cleanupSession() {
     document.removeEventListener('visibilitychange', visibilityHandler);
     visibilityHandler = null;
   }
+  // Remove delegated click handler
+  if (lobbyContainer && lobbyContainer._lobbyClickHandler) {
+    lobbyContainer.removeEventListener('click', lobbyContainer._lobbyClickHandler);
+    lobbyContainer._lobbyClickHandler = null;
+  }
   realtimeChannel = null;
   activeSession = null;
   groupOwnerId = null;
   lobbyRendered = false;
   lobbyContainer = null;
   hostUsurped = false;
+  pendingUsurpType = null;
   setLogs = [];
   timers = {};
 }

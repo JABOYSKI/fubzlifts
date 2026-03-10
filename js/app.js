@@ -181,6 +181,14 @@ document.querySelectorAll('.nav-tab').forEach(tab => {
   tab.addEventListener('click', () => navigateTo(tab.dataset.page));
 });
 
+// Header logo → groups, header alias → profile
+document.getElementById('headerLogo').addEventListener('click', () => {
+  if (getUser()) navigateTo('groups');
+});
+document.getElementById('headerAlias').addEventListener('click', () => {
+  if (getUser()) navigateTo('profile');
+});
+
 function esc(str) {
   const d = document.createElement('div');
   d.textContent = str;

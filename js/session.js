@@ -158,27 +158,25 @@ function subscribeToSession(container) {
   if (realtimeChannel) supabase.removeChannel(realtimeChannel);
   lobbyContainer = container;
 
-  // Reconnect realtime when tab becomes visible again (fixes alt-tab issue)
+  // Reconnect realtime after auth token is refreshed (fires from supabase.js)
   if (!visibilityHandler) {
     visibilityHandler = async () => {
-      if (document.visibilityState === 'visible' && activeSession && lobbyContainer) {
-      
-        const { data } = await supabase.from('sessions').select('*').eq('id', activeSession.id).single();
-        if (data) {
-          activeSession = data;
-          if (activeSession.status === 'lobby') {
-            // Use DOM patching (not full re-render) to preserve event handlers
-            renderLobby(lobbyContainer);
-          } else if (activeSession.status === 'active') {
-            renderSession(lobbyContainer);
-          }
+      if (!activeSession || !lobbyContainer) return;
+
+      const { data } = await supabase.from('sessions').select('*').eq('id', activeSession.id).single();
+      if (data) {
+        activeSession = data;
+        if (activeSession.status === 'lobby') {
+          renderLobby(lobbyContainer);
+        } else if (activeSession.status === 'active') {
+          renderSession(lobbyContainer);
         }
-        if (realtimeChannel) supabase.removeChannel(realtimeChannel);
-        realtimeChannel = null;
-        setupRealtimeChannel(lobbyContainer);
       }
+      if (realtimeChannel) supabase.removeChannel(realtimeChannel);
+      realtimeChannel = null;
+      setupRealtimeChannel(lobbyContainer);
     };
-    document.addEventListener('visibilitychange', visibilityHandler);
+    window.addEventListener('app-resumed', visibilityHandler);
   }
 
   setupRealtimeChannel(container);
@@ -1013,7 +1011,7 @@ export function cleanupSession() {
   clearInterval(timerInterval);
   if (realtimeChannel) supabase.removeChannel(realtimeChannel);
   if (visibilityHandler) {
-    document.removeEventListener('visibilitychange', visibilityHandler);
+    window.removeEventListener('app-resumed', visibilityHandler);
     visibilityHandler = null;
   }
   // Remove delegated click handler

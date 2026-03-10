@@ -95,10 +95,10 @@ function navigateTo(page) {
   }
 }
 
-// Re-render groups or profile when tab resumes (fixes stale handlers after minimize)
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible' || !getUser()) return;
-  // Session view has its own visibility handler — only handle groups & profile
+// Re-render groups or profile after auth token is refreshed (fires from supabase.js)
+window.addEventListener('app-resumed', () => {
+  if (!getUser()) return;
+  // Session view has its own resume handler — only handle groups & profile
   if (currentPage === 'groups') {
     currentGroupRef = renderGroups(
       document.getElementById('groupsView'),

@@ -1,6 +1,6 @@
 // Main app module — routing and state
 import { initAuth, onAuthChange, renderAuth, signOut, getUser } from './auth.js';
-import { renderGroups, getMyGroups, getGroupWeights } from './group.js';
+import { renderGroups } from './group.js';
 import { startSession, cleanupSession } from './session.js';
 import { supabase } from './supabase.js';
 import { showView, toast, EXERCISE_NAMES } from './utils.js';
@@ -94,13 +94,11 @@ async function renderProfile() {
   const user = getUser();
   const container = document.getElementById('profileView');
 
-  // Load groups and weights
-  const groups = await getMyGroups();
-  const allWeights = {};
-  for (const g of groups) {
-    const weights = await getGroupWeights(g.id);
-    allWeights[g.id] = weights.filter(w => w.user_id === user.id);
-  }
+  // Load personal weights
+  const { data: weights } = await supabase
+    .from('profile_weights')
+    .select('*')
+    .eq('user_id', user.id);
 
   const exercises = ['squat', 'bench', 'ohp', 'row', 'deadlift'];
 
@@ -119,52 +117,47 @@ async function renderProfile() {
       </div>
     </div>
 
-    ${groups.map(g => `
-      <div class="section" data-group-id="${g.id}">
-        <h3>Weights — ${esc(g.name)}</h3>
-        <div class="card">
-          ${exercises.map(ex => {
-            const w = allWeights[g.id]?.find(r => r.exercise === ex);
-            const weight = w?.weight_lbs || 45;
-            return `
-              <div class="form-group" style="flex-direction:row;align-items:center;justify-content:space-between;gap:8px">
-                <label style="margin:0;min-width:100px">${EXERCISE_NAMES[ex]}</label>
-                <div style="display:flex;align-items:center;gap:6px">
-                  <input type="number" class="field weight-input" data-group="${g.id}" data-exercise="${ex}"
-                    value="${weight}" min="0" step="5" style="width:80px;text-align:center" />
-                  <span class="muted" style="font-size:12px">lbs</span>
-                </div>
+    <div class="section">
+      <h3>My Weights</h3>
+      <div class="card">
+        ${exercises.map(ex => {
+          const w = (weights || []).find(r => r.exercise === ex);
+          const weight = w?.weight_lbs || 45;
+          return `
+            <div class="form-group" style="flex-direction:row;align-items:center;justify-content:space-between;gap:8px">
+              <label style="margin:0;min-width:100px">${EXERCISE_NAMES[ex]}</label>
+              <div style="display:flex;align-items:center;gap:6px">
+                <input type="number" class="field weight-input" data-exercise="${ex}"
+                  value="${weight}" min="0" step="5" style="width:80px;text-align:center" />
+                <span class="muted" style="font-size:12px">lbs</span>
               </div>
-            `;
-          }).join('')}
-          <button class="btn btn-primary save-weights-btn" data-group="${g.id}" style="margin-top:12px;width:100%">Save Weights</button>
-        </div>
+            </div>
+          `;
+        }).join('')}
+        <button class="btn btn-primary" id="saveWeightsBtn" style="margin-top:12px;width:100%">Save Weights</button>
       </div>
-    `).join('')}
+    </div>
 
     <button class="btn btn-danger" id="signOutBtn" style="margin-top:16px">Sign Out</button>
   `;
 
-  // Save weights handlers
-  container.querySelectorAll('.save-weights-btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const groupId = btn.dataset.group;
-      const inputs = container.querySelectorAll(`.weight-input[data-group="${groupId}"]`);
-      const updates = [];
-      inputs.forEach(input => {
-        updates.push({
-          user_id: user.id,
-          group_id: groupId,
-          exercise: input.dataset.exercise,
-          weight_lbs: parseInt(input.value) || 45,
-        });
+  // Save weights
+  container.querySelector('#saveWeightsBtn').addEventListener('click', async () => {
+    const btn = container.querySelector('#saveWeightsBtn');
+    const inputs = container.querySelectorAll('.weight-input');
+    const rows = [];
+    inputs.forEach(input => {
+      rows.push({
+        user_id: user.id,
+        exercise: input.dataset.exercise,
+        weight_lbs: parseInt(input.value) || 45,
       });
-      const { error } = await supabase.from('user_weights').upsert(updates);
-      if (error) { toast(error.message); return; }
-      toast('Weights saved!');
-      btn.textContent = '✓ Saved';
-      setTimeout(() => { btn.textContent = 'Save Weights'; }, 1500);
     });
+    const { error } = await supabase.from('profile_weights').upsert(rows);
+    if (error) { toast(error.message); return; }
+    toast('Weights saved!');
+    btn.textContent = '✓ Saved';
+    setTimeout(() => { btn.textContent = 'Save Weights'; }, 1500);
   });
 
   container.querySelector('#signOutBtn').addEventListener('click', async () => {

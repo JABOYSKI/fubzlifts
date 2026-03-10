@@ -1,7 +1,7 @@
 // Session flow module — the heart of FubzLifts
 import { supabase } from './supabase.js';
 import { getUser } from './auth.js';
-import { getGroupMembers, getGroupWeights } from './group.js';
+import { getGroupMembers } from './group.js';
 import {
   toast, formatTime, showView,
   WORKOUTS, EXERCISE_NAMES, DEFAULT_SETS,
@@ -111,12 +111,15 @@ export async function startSession(groupId, container, onEnd) {
     .single();
   groupOwnerId = groupData?.owner_id || null;
 
-  // Load members and weights
+  // Load members and their profile weights
   const members = await getGroupMembers(activeSession.group_id);
   sessionMembers = members;
-  const weights = await getGroupWeights(activeSession.group_id);
+  const { data: weights } = await supabase
+    .from('profile_weights')
+    .select('*')
+    .in('user_id', activeSession.turn_order);
   memberWeights = {};
-  weights.forEach(w => {
+  (weights || []).forEach(w => {
     if (!memberWeights[w.user_id]) memberWeights[w.user_id] = {};
     memberWeights[w.user_id][w.exercise] = w.weight_lbs;
   });
@@ -570,25 +573,22 @@ async function processProgression() {
       const anyFail = userLogs.some(l => !l.success);
 
       const { data: weightRow } = await supabase
-        .from('user_weights')
+        .from('profile_weights')
         .select('*')
         .eq('user_id', uid)
-        .eq('group_id', activeSession.group_id)
         .eq('exercise', exercise)
         .single();
 
       if (!weightRow) continue;
 
       if (allSuccess) {
-        await supabase.from('user_weights').update({
+        await supabase.from('profile_weights').update({
           weight_lbs: weightRow.weight_lbs + 5,
-          fail_streak: 0,
-        }).eq('user_id', uid).eq('group_id', activeSession.group_id).eq('exercise', exercise);
-      } else if (anyFail) {
-        const newStreak = weightRow.fail_streak + 1;
-        await supabase.from('user_weights').update({
-          fail_streak: newStreak,
-        }).eq('user_id', uid).eq('group_id', activeSession.group_id).eq('exercise', exercise);
+        }).eq('user_id', uid).eq('exercise', exercise);
+      }
+      // Update local cache so summary shows new weight
+      if (allSuccess && memberWeights[uid]) {
+        memberWeights[uid][exercise] = weightRow.weight_lbs + 5;
       }
     }
   }

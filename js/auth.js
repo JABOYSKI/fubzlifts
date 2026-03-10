@@ -1,6 +1,6 @@
 // Authentication module
 import { supabase } from './supabase.js';
-import { toast } from './utils.js';
+import { toast, STARTING_WEIGHT } from './utils.js';
 import { BUILD_TIME } from './version.js';
 
 let currentUser = null;
@@ -39,6 +39,7 @@ async function loadProfile(authUser) {
       .single();
     if (data) {
       currentUser = data;
+      await ensureProfileWeights(data.id);
       return data;
     }
     if (i < 2) await new Promise(r => setTimeout(r, 600));
@@ -53,13 +54,35 @@ async function loadProfile(authUser) {
     .single();
   if (inserted) {
     currentUser = inserted;
+    await ensureProfileWeights(inserted.id);
     return inserted;
   }
 
   // Last resort: use auth metadata so the app still works
   console.warn('Could not load/create profile, using auth metadata');
   currentUser = { id: authUser.id, alias, avatar_url: null };
+  await ensureProfileWeights(authUser.id);
   return currentUser;
+}
+
+/** Ensure profile_weights rows exist for a user (seeds defaults if missing) */
+async function ensureProfileWeights(userId) {
+  const { data } = await supabase
+    .from('profile_weights')
+    .select('exercise')
+    .eq('user_id', userId);
+  const existing = (data || []).map(r => r.exercise);
+  const exercises = ['squat', 'bench', 'ohp', 'row', 'deadlift'];
+  const missing = exercises.filter(e => !existing.includes(e));
+  if (missing.length > 0) {
+    await supabase.from('profile_weights').insert(
+      missing.map(exercise => ({
+        user_id: userId,
+        exercise,
+        weight_lbs: STARTING_WEIGHT,
+      }))
+    );
+  }
 }
 
 /** Sign up with email + password — profile created by DB trigger */

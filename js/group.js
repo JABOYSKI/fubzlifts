@@ -1,7 +1,7 @@
 // Group management module
 import { supabase } from './supabase.js';
 import { getUser } from './auth.js';
-import { toast, generateJoinCode, STARTING_WEIGHT, EXERCISE_NAMES } from './utils.js';
+import { toast, generateJoinCode } from './utils.js';
 
 /** Fetch all groups the current user belongs to */
 export async function getMyGroups() {
@@ -23,16 +23,6 @@ export async function getGroupMembers(groupId) {
     .eq('group_id', groupId);
   if (error) { toast(error.message); return []; }
   return (data || []).map(row => ({ ...row.users, is_admin: row.is_admin }));
-}
-
-/** Get weights for all members in a group */
-export async function getGroupWeights(groupId) {
-  const { data, error } = await supabase
-    .from('user_weights')
-    .select('*')
-    .eq('group_id', groupId);
-  if (error) return [];
-  return data || [];
 }
 
 /** Create a new group */
@@ -65,9 +55,6 @@ export async function createGroup(name) {
   await supabase.from('group_members').insert({
     group_id: group.id, user_id: user.id, is_admin: true
   });
-
-  // Initialize weights for creator
-  await initUserWeights(user.id, group.id);
 
   toast(`Group "${name}" created! Code: ${joinCode}`);
   return group;
@@ -106,22 +93,8 @@ export async function joinGroup(code) {
     .insert({ group_id: group.id, user_id: user.id });
   if (error) { toast(error.message); return null; }
 
-  await initUserWeights(user.id, group.id);
   toast(`Joined "${group.name}"!`);
   return group;
-}
-
-/** Initialize default weights for a user in a group */
-async function initUserWeights(userId, groupId) {
-  const exercises = ['squat', 'bench', 'ohp', 'row', 'deadlift'];
-  const rows = exercises.map(exercise => ({
-    user_id: userId,
-    group_id: groupId,
-    exercise,
-    weight_lbs: STARTING_WEIGHT,
-    fail_streak: 0,
-  }));
-  await supabase.from('user_weights').upsert(rows);
 }
 
 /** Delete a group — removes all related data */
@@ -129,14 +102,13 @@ export async function deleteGroup(groupId) {
   const user = getUser();
   if (!user) return false;
 
-  // Delete in order: set_logs → sessions, session_members → user_weights → group_members → group
-  await supabase.from('set_logs').delete().eq('group_id', groupId);
-  await supabase.from('session_members').delete().in(
-    'session_id',
-    (await supabase.from('sessions').select('id').eq('group_id', groupId)).data?.map(s => s.id) || []
-  );
+  // Delete in order: set_logs → session_members → sessions → group_members → group
+  const sessionIds = (await supabase.from('sessions').select('id').eq('group_id', groupId)).data?.map(s => s.id) || [];
+  if (sessionIds.length > 0) {
+    await supabase.from('set_logs').delete().in('session_id', sessionIds);
+    await supabase.from('session_members').delete().in('session_id', sessionIds);
+  }
   await supabase.from('sessions').delete().eq('group_id', groupId);
-  await supabase.from('user_weights').delete().eq('group_id', groupId);
   await supabase.from('group_members').delete().eq('group_id', groupId);
   const { error } = await supabase.from('groups').delete().eq('id', groupId);
   if (error) { toast(error.message); return false; }

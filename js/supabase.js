@@ -12,25 +12,30 @@ let _refreshPromise = null;
 
 /**
  * Ensures the Supabase auth token is fresh after returning from background.
- * No-op if the tab was never hidden. Multiple callers share one in-flight request.
+ * No-op if the tab was never hidden. Times out after 3s to never block UI.
  */
 export async function ensureFreshAuth() {
   if (!_needsRefresh) return;
   if (_refreshPromise) return _refreshPromise;
-  _refreshPromise = supabase.auth.refreshSession()
+
+  const timeout = new Promise(r => setTimeout(r, 3000));
+  const refresh = supabase.auth.refreshSession()
     .then(() => { _needsRefresh = false; })
-    .catch(() => { _needsRefresh = false; })
+    .catch(() => { _needsRefresh = false; });
+
+  _refreshPromise = Promise.race([refresh, timeout])
     .finally(() => { _refreshPromise = null; });
+
   return _refreshPromise;
 }
 
 // When tab is hidden, flag that we need a refresh on return
-// When tab is visible again, ensure body is shown and kick off refresh
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
     _needsRefresh = true;
   } else if (document.visibilityState === 'visible') {
     document.body.style.opacity = '1';
+    // Fire-and-forget: pre-warm the token but don't block anything
     ensureFreshAuth();
   }
 });

@@ -19,6 +19,7 @@ let onSessionEnd = null;
 let groupOwnerId = null; // the group's actual owner
 let visibilityHandler = null; // track the handler so we can remove it on cleanup
 let lobbyContainer = null; // ref for visibility reconnect
+let sessionStartedAt = 0; // timestamp to debounce visibility handler after fresh start
 
 /** Determine who is the session admin (host).
  *  Priority: group owner if present, otherwise first in turn_order. */
@@ -42,6 +43,7 @@ function getMaxSets(exercise) {
 /** Start or join a session/lobby for a group */
 export async function startSession(groupId, container, onEnd) {
   await ensureFreshAuth();
+  sessionStartedAt = Date.now();
   onSessionEnd = onEnd;
   const user = getUser();
 
@@ -161,6 +163,8 @@ function subscribeToSession(container) {
   // Reconnect realtime when tab becomes visible again (fixes alt-tab issue)
   if (!visibilityHandler) {
     visibilityHandler = async () => {
+      // Skip if session was just started (avoids clobbering fresh render)
+      if (Date.now() - sessionStartedAt < 3000) return;
       if (document.visibilityState === 'visible' && activeSession && lobbyContainer) {
         await ensureFreshAuth();
         const { data } = await supabase.from('sessions').select('*').eq('id', activeSession.id).single();
@@ -1006,6 +1010,7 @@ export function cleanupSession() {
   lobbyRendered = false;
   lobbyContainer = null;
   hostUsurped = false;
+  sessionStartedAt = 0;
   setLogs = [];
   timers = {};
 }

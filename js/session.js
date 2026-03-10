@@ -17,7 +17,7 @@ let realtimeChannel = null;
 let onSessionEnd = null;
 
 let groupOwnerId = null; // the group's actual owner
-let visibilityHandler = null; // track the handler so we can remove it on cleanup
+// visibilityHandler removed — app.js invisible reload handles tab resume
 let lobbyContainer = null; // ref for visibility reconnect
 
 /** Determine who is the session admin (host).
@@ -157,25 +157,6 @@ async function loadSessionState(container) {
 function subscribeToSession(container) {
   if (realtimeChannel) supabase.removeChannel(realtimeChannel);
   lobbyContainer = container;
-
-  // Reconnect realtime when tab becomes visible (WebSocket may have dropped)
-  if (!visibilityHandler) {
-    visibilityHandler = () => {
-      if (document.visibilityState !== 'visible') return;
-      if (!activeSession || !lobbyContainer) return;
-      // Only reconnect the realtime channel — do NOT re-render.
-      // Existing DOM + event handlers are still valid.
-      // The fresh channel will deliver any missed updates and trigger renders naturally.
-      try {
-        if (realtimeChannel) supabase.removeChannel(realtimeChannel);
-        realtimeChannel = null;
-        setupRealtimeChannel(lobbyContainer);
-      } catch (e) {
-        console.error('[FubzLifts] Realtime reconnect error:', e);
-      }
-    };
-    document.addEventListener('visibilitychange', visibilityHandler);
-  }
 
   setupRealtimeChannel(container);
 }
@@ -1023,10 +1004,6 @@ function renderSessionSummary(container) {
 export function cleanupSession() {
   clearInterval(timerInterval);
   if (realtimeChannel) supabase.removeChannel(realtimeChannel);
-  if (visibilityHandler) {
-    document.removeEventListener('visibilitychange', visibilityHandler);
-    visibilityHandler = null;
-  }
   // Remove delegated click handler
   if (lobbyContainer && lobbyContainer._lobbyClickHandler) {
     lobbyContainer.removeEventListener('click', lobbyContainer._lobbyClickHandler);

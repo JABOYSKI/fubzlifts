@@ -26,6 +26,7 @@
   --radius: 6px;
 }
 
+html { background: var(--bg); }
 * { box-sizing: border-box; -webkit-font-smoothing: antialiased; }
 body {
   margin: 0;

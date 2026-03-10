@@ -7,13 +7,36 @@ import { showView, toast, EXERCISE_NAMES } from './utils.js';
 
 let currentGroupRef = null;
 let currentPage = null;
+let activeGroupId = null; // track which group we're in a session for
+
+// ─── Invisible reload on tab resume ───────────────────────
+// Saves current page + session group, reloads from SW cache (instant),
+// restores position. Fixes all handler/token/realtime issues.
+let wasHidden = false;
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    wasHidden = true;
+    // Save state before we go
+    if (getUser()) {
+      sessionStorage.setItem('fubz_resume', JSON.stringify({
+        page: currentPage || 'groups',
+        groupId: activeGroupId,
+      }));
+    }
+  } else if (wasHidden) {
+    // Tab just became visible after being hidden — reload
+    wasHidden = false;
+    window.location.reload();
+  }
+});
+
+// ─── Init ────────────────────────────────────────────────
 
 async function init() {
   const user = await initAuth();
 
   onAuthChange((user, event) => {
-    // Only react to actual sign-in/sign-out transitions, not token refreshes
-    // INITIAL_SESSION is handled by the initAuth() + if(user) block above
     if (event === 'SIGNED_IN') {
       if (user) renderApp();
     } else if (event === 'SIGNED_OUT') {
@@ -32,7 +55,6 @@ function showAuthScreen() {
   document.querySelector('header').style.display = 'none';
   document.querySelector('.container').style.display = 'none';
   hideNav();
-  // Render splash directly on body
   let splash = document.getElementById('authSplash');
   if (!splash) {
     splash = document.createElement('div');
@@ -63,17 +85,28 @@ function renderApp() {
   if (!user) return;
 
   dismissAuthScreen();
-  // Update header
   document.getElementById('headerAlias').textContent = user.alias;
   showNav();
-  navigateTo('groups');
+
+  // Check for saved resume state (from invisible reload)
+  const resume = JSON.parse(sessionStorage.getItem('fubz_resume') || 'null');
+  sessionStorage.removeItem('fubz_resume');
+
+  if (resume?.page === 'session' && resume.groupId) {
+    // Restore into session/lobby for the same group
+    navigateToSession(resume.groupId);
+  } else if (resume?.page === 'profile') {
+    navigateTo('profile');
+  } else {
+    navigateTo('groups');
+  }
 }
 
 function navigateTo(page) {
   cleanupSession();
   currentPage = page;
+  activeGroupId = null;
 
-  // Update nav tabs
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.page === page));
 
   if (page === 'groups') {
@@ -81,13 +114,7 @@ function navigateTo(page) {
     currentGroupRef = renderGroups(
       document.getElementById('groupsView'),
       (groupId) => { /* group detail — future */ },
-      (groupId) => {
-        currentPage = 'session';
-        showView('sessionView');
-        startSession(groupId, document.getElementById('sessionView'), () => {
-          navigateTo('groups');
-        });
-      }
+      (groupId) => navigateToSession(groupId)
     );
   } else if (page === 'profile') {
     showView('profileView');
@@ -95,15 +122,22 @@ function navigateTo(page) {
   }
 }
 
-// NO re-render on tab resume — existing DOM and handlers persist fine.
-// Supabase's built-in autoRefreshToken handles token refresh.
-// Session.js handles its own realtime reconnection.
+/** Navigate into a session (from group start button or resume) */
+function navigateToSession(groupId) {
+  cleanupSession();
+  currentPage = 'session';
+  activeGroupId = groupId;
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  showView('sessionView');
+  startSession(groupId, document.getElementById('sessionView'), () => {
+    navigateTo('groups');
+  });
+}
 
 async function renderProfile() {
   const user = getUser();
   const container = document.getElementById('profileView');
 
-  // Load personal weights
   const { data: weights } = await supabase
     .from('profile_weights')
     .select('*')
@@ -150,7 +184,6 @@ async function renderProfile() {
     <button class="btn btn-danger" id="signOutBtn" style="margin-top:16px">Sign Out</button>
   `;
 
-  // Save weights
   container.querySelector('#saveWeightsBtn').addEventListener('click', async () => {
     const btn = container.querySelector('#saveWeightsBtn');
     const inputs = container.querySelectorAll('.weight-input');

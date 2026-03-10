@@ -226,6 +226,8 @@ export function renderAuth(container) {
         const regs = await navigator.serviceWorker.getRegistrations();
         await Promise.all(regs.map(r => r.unregister()));
       } catch (e) {}
+      // Force-fetch fresh page into browser HTTP cache, then reload
+      try { await fetch(window.location.href, { cache: 'reload' }); } catch (e) {}
       window.location.reload();
     });
 

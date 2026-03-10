@@ -55,7 +55,7 @@ header .row {
   padding: 10px 16px; max-width: 580px; margin: 0 auto;
 }
 .logo {
-  font-weight: 700; font-size: 22px; letter-spacing: .3px;
+  font-weight: 700; font-size: 26px; letter-spacing: .3px;
   color: var(--orange); flex-shrink: 0;
 }
 .header-spacer { flex: 1; }
@@ -302,10 +302,10 @@ h3 { margin: 0 0 8px; font-size: 11px; font-weight: 600; color: var(--muted-colo
   from { opacity: 0; transform: translateY(20px) scale(0.97); }
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
-.splash-logo { text-align: center; line-height: 1; }
+.splash-logo { font-size: 2.4rem; text-align: center; color: var(--orange); line-height: 1; }
 .splash-title {
-  font-size: 1.5rem; font-weight: 700; color: var(--text);
-  text-align: center; margin: 0;
+  font-size: 26px; font-weight: 700; color: var(--orange);
+  letter-spacing: .3px; text-align: center; margin: 0;
 }
 .splash-sub {
   font-size: .87rem; color: var(--muted-color);
@@ -352,12 +352,12 @@ h3 { margin: 0 0 8px; font-size: 11px; font-weight: 600; color: var(--muted-colo
 .splash-update-link:hover { color: var(--muted-color); }
 @media (max-width: 480px) {
   .splash-card { padding: 28px 20px; gap: 12px; }
-  .splash-logo svg { width: 48px; height: 48px; }
-  .splash-title { font-size: 1.3rem; }
+  .splash-logo img { width: 72px !important; height: 72px !important; border-width: 2px !important; }
+  .splash-title { font-size: 22px; }
 }
 @media (max-height: 640px) {
   .splash-card { padding: 20px 18px; gap: 10px; }
-  .splash-logo svg { width: 40px; height: 40px; }
+  .splash-logo img { width: 60px !important; height: 60px !important; border-width: 2px !important; }
   .splash-field { gap: 4px; }
 }
 

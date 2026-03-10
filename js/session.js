@@ -1,5 +1,5 @@
 // Session flow module — the heart of FubzLifts
-import { supabase } from './supabase.js';
+import { supabase, ensureFreshAuth } from './supabase.js';
 import { getUser } from './auth.js';
 import { getGroupMembers } from './group.js';
 import {
@@ -41,6 +41,7 @@ function getMaxSets(exercise) {
 
 /** Start or join a session/lobby for a group */
 export async function startSession(groupId, container, onEnd) {
+  await ensureFreshAuth();
   onSessionEnd = onEnd;
   const user = getUser();
 
@@ -161,8 +162,7 @@ function subscribeToSession(container) {
   if (!visibilityHandler) {
     visibilityHandler = async () => {
       if (document.visibilityState === 'visible' && activeSession && lobbyContainer) {
-        // Ensure auth token is fresh before making API calls
-        try { await supabase.auth.refreshSession(); } catch (e) {}
+        await ensureFreshAuth();
         const { data } = await supabase.from('sessions').select('*').eq('id', activeSession.id).single();
         if (data) {
           activeSession = data;

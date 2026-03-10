@@ -2,7 +2,7 @@
 import { initAuth, onAuthChange, renderAuth, signOut, getUser } from './auth.js';
 import { renderGroups } from './group.js';
 import { startSession, cleanupSession } from './session.js';
-import { supabase } from './supabase.js';
+import { supabase, ensureFreshAuth } from './supabase.js';
 import { showView, toast, EXERCISE_NAMES } from './utils.js';
 
 let currentGroupRef = null;
@@ -66,7 +66,8 @@ function renderApp() {
   navigateTo('groups');
 }
 
-function navigateTo(page) {
+async function navigateTo(page) {
+  await ensureFreshAuth();
   cleanupSession();
 
   // Update nav tabs
@@ -194,17 +195,6 @@ function esc(str) {
   d.textContent = str;
   return d.innerHTML;
 }
-
-// Restore auth session + ensure body visible on alt-tab back
-// This MUST run before any other visibility handlers that make API calls
-document.addEventListener('visibilitychange', async () => {
-  if (document.visibilityState === 'visible') {
-    // Safety: ensure body is always visible when tab is focused
-    document.body.style.opacity = '1';
-    // Force-refresh the Supabase auth token (getSession only returns cached)
-    try { await supabase.auth.refreshSession(); } catch (e) {}
-  }
-}, true); // useCapture=true ensures this fires BEFORE other handlers
 
 // Boot
 init();

@@ -41,8 +41,14 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
-  // Network-first for API calls (Supabase) and esm.sh imports
-  if (url.hostname.includes('supabase') || url.hostname.includes('esm.sh')) {
+  // Let Supabase API calls bypass the SW entirely — browser handles them directly
+  // This prevents the SW from interfering with POST/PATCH/DELETE after tab resume
+  if (url.hostname.includes('supabase')) {
+    return;
+  }
+
+  // Network-first for esm.sh CDN imports
+  if (url.hostname.includes('esm.sh')) {
     event.respondWith(
       fetch(event.request).catch(() => caches.match(event.request))
     );

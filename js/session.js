@@ -167,7 +167,7 @@ function subscribeToSession(container) {
         if (data) {
           activeSession = data;
           if (activeSession.status === 'lobby') {
-            lobbyRendered = false;
+            // Use DOM patching (not full re-render) to preserve event handlers
             renderLobby(lobbyContainer);
           } else if (activeSession.status === 'active') {
             renderSession(lobbyContainer);

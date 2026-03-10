@@ -195,5 +195,15 @@ function esc(str) {
   return d.innerHTML;
 }
 
+// Restore auth session + ensure body visible on alt-tab back
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState === 'visible') {
+    // Safety: ensure body is always visible when tab is focused
+    document.body.style.opacity = '1';
+    // Refresh the Supabase auth token so API calls don't fail
+    try { await supabase.auth.getSession(); } catch (e) {}
+  }
+});
+
 // Boot
 init();

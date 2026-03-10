@@ -124,7 +124,7 @@ export function renderAuth(container) {
       <div class="splash-screen">
         <div class="splash-card">
           <div class="splash-logo">
-            <img src="icons/icon-192.png" alt="FubzLifts" style="width:90px;height:90px;border-radius:50%;border:3px solid var(--orange);object-fit:cover;transform:translateZ(0)" />
+            <img src="icons/icon-192.png" alt="FubzLifts" style="width:90px;height:90px;border-radius:50%;border:3px solid #6FAEC5;object-fit:cover;transform:translateZ(0)" />
           </div>
           <h1 class="splash-title">FubzLifts</h1>
           <p class="splash-sub">${isLogin

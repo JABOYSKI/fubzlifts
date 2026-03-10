@@ -226,14 +226,7 @@ export function renderAuth(container) {
         const regs = await navigator.serviceWorker.getRegistrations();
         await Promise.all(regs.map(r => r.unregister()));
       } catch (e) {}
-      document.body.style.transition = 'opacity 0.3s ease';
-      document.body.style.opacity = '0';
-      // Navigate with cache-busting param to bypass browser HTTP cache
-      setTimeout(() => {
-        const url = new URL(window.location.href);
-        url.searchParams.set('_cb', Date.now());
-        window.location.replace(url.href);
-      }, 350);
+      window.location.reload();
     });
 
     // Restore saved credentials if "Remember me" was checked

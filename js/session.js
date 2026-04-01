@@ -40,6 +40,11 @@ function getMaxSets(exercise) {
   return DEFAULT_SETS[exercise];
 }
 
+/** Check if an exercise uses simultaneous mode (all lift at once) */
+function isSimultaneous(exercise) {
+  return !!activeSession?.lobby_state?.simultaneous?.[exercise];
+}
+
 /** Start or join a session/lobby for a group */
 export async function startSession(groupId, container, onEnd) {
 
@@ -83,6 +88,7 @@ export async function startSession(groupId, container, onEnd) {
         [user.id]: { workout_vote: 'A', ready: false }
       },
       dl_sets: 1,
+      simultaneous: { row: false, deadlift: false },
     };
     const { data: session, error } = await supabase
       .from('sessions')
@@ -425,6 +431,13 @@ function renderHostArea(isHost, allReady, readyCount, totalMembers, lobbyState, 
             `).join('')}
           </div>
         </div>
+        <div class="form-group" id="adminSimGroup" style="margin-top:12px">
+          <label>Simultaneous Sets <span class="muted" style="font-size:11px;font-weight:400">(all lift at once)</span></label>
+          <div class="btn-group">
+            <button class="btn ${lobbyState.simultaneous?.row ? 'btn-primary' : ''} admin-toggle-sim" data-exercise="row" style="${currentType === 'A' ? '' : 'display:none'}">Row</button>
+            <button class="btn ${lobbyState.simultaneous?.deadlift ? 'btn-primary' : ''} admin-toggle-sim" data-exercise="deadlift" style="${currentType === 'B' ? '' : 'display:none'}">Deadlift</button>
+          </div>
+        </div>
         <button class="btn btn-primary btn-large" id="lobbyStartBtn" style="margin-top:12px;width:100%" ${allReady ? '' : 'disabled'}>
           Start Workout (${readyCount}/${totalMembers} ready)
         </button>
@@ -481,6 +494,12 @@ function patchLobby(container, state) {
     // Patch admin DL buttons
     container.querySelectorAll('.admin-set-dl').forEach(btn => {
       btn.classList.toggle('btn-primary', parseInt(btn.dataset.sets) === (lobbyState.dl_sets || 1));
+    });
+    // Patch simultaneous buttons visibility and state
+    container.querySelectorAll('.admin-toggle-sim').forEach(btn => {
+      const ex = btn.dataset.exercise;
+      btn.style.display = (ex === 'row' && currentType === 'A') || (ex === 'deadlift' && currentType === 'B') ? '' : 'none';
+      btn.classList.toggle('btn-primary', !!lobbyState.simultaneous?.[ex]);
     });
     // Patch start button
     const startBtn = container.querySelector('#lobbyStartBtn');
@@ -606,6 +625,17 @@ function setupLobbyDelegation(container) {
       return;
     }
 
+    // Toggle simultaneous mode
+    if (target.classList.contains('admin-toggle-sim')) {
+      const ex = target.dataset.exercise;
+      const sim = { ...(activeSession.lobby_state?.simultaneous || {}), [ex]: !activeSession.lobby_state?.simultaneous?.[ex] };
+      const ls = { ...activeSession.lobby_state, simultaneous: sim };
+      activeSession.lobby_state = ls;
+      target.classList.toggle('btn-primary');
+      supabase.from('sessions').update({ lobby_state: ls }).eq('id', activeSession.id);
+      return;
+    }
+
     // Start workout
     if (target.id === 'lobbyStartBtn') {
       adminStartSession(container);
@@ -711,9 +741,10 @@ function startTimerTick(container) {
   clearInterval(timerInterval);
   timerInterval = setInterval(() => {
     if (!activeSession || activeSession.status !== 'active') return;
+    const simultaneous = isSimultaneous(activeSession.current_exercise);
     const activeTurnUserId = activeSession.turn_order[activeSession.current_turn_index];
     activeSession.turn_order.forEach(uid => {
-      if (uid !== activeTurnUserId) {
+      if (simultaneous || uid !== activeTurnUserId) {
         timers[uid] = (timers[uid] || 0) + 1;
       }
     });
@@ -803,6 +834,9 @@ async function advanceTurn() {
     return;
   }
 
+  // In simultaneous mode, no turn rotation — set_logs INSERT triggers re-render
+  if (isSimultaneous(exercise)) return;
+
   // Find next person who still has sets to do
   let nextIdx = (activeSession.current_turn_index + 1) % activeSession.turn_order.length;
   let attempts = 0;
@@ -821,13 +855,19 @@ async function advanceTurn() {
 
 /** Show congratulatory splash between exercises */
 function showExerciseSplash(exercise, onDone) {
+  const alias = getUser()?.alias || 'team';
   const splash = document.createElement('div');
   splash.className = 'splash-overlay';
   splash.innerHTML = `
     <div class="splash-content">
       <h2>${EXERCISE_NAMES[exercise]} Complete!</h2>
-      <p>Great work, team. Next exercise loading...</p>
-      <p class="muted" style="font-size:12px;margin-top:16px">Tap anywhere to continue</p>
+      <div style="display:flex;align-items:flex-start;justify-content:center;gap:12px;margin:20px 0">
+        <img src="icons/icon-192.png" alt="" style="width:64px;height:64px;border-radius:50%;flex-shrink:0" />
+        <div style="background:var(--card-bg);border:1px solid var(--orange);border-radius:12px 12px 12px 2px;padding:10px 14px;font-size:15px;color:var(--text-color)">
+          Good job, ${esc(alias)}!
+        </div>
+      </div>
+      <p class="muted" style="font-size:12px;margin-top:12px">Tap anywhere to continue</p>
     </div>
   `;
   document.body.appendChild(splash);
@@ -906,13 +946,16 @@ function renderSession(container) {
   const exerciseName = EXERCISE_NAMES[exercise];
   const maxSets = getMaxSets(exercise);
   const exercises = WORKOUTS[activeSession.workout_type];
-  const activeTurnUserId = activeSession.turn_order[activeSession.current_turn_index];
-  const isMyTurn = activeTurnUserId === user.id;
+  const simultaneous = isSimultaneous(exercise);
+  // In simultaneous mode, show your own weight/progress; in turn mode, show active person's
+  const activeTurnUserId = simultaneous ? user.id : activeSession.turn_order[activeSession.current_turn_index];
+  const isMyTurn = simultaneous || activeTurnUserId === user.id;
   const activeAlias = sessionMembers.find(m => m.id === activeTurnUserId)?.alias || 'Unknown';
   const weight = memberWeights[activeTurnUserId]?.[exercise] || 45;
 
   const activeLogs = setLogs.filter(l => l.user_id === activeTurnUserId && l.exercise === exercise);
   const currentSetNum = activeLogs.length + 1;
+  const mySetsDone = simultaneous && activeLogs.length >= maxSets;
 
   container.innerHTML = `
     <div class="exercise-banner">
@@ -921,10 +964,12 @@ function renderSession(container) {
       <div class="exercise-meta">${maxSets} × 5 reps</div>
     </div>
 
-    <div class="turn-indicator ${isMyTurn ? 'your-turn pulsing' : ''}">
-      ${isMyTurn
-        ? '🏋️ YOUR TURN'
-        : `Waiting for <span class="name">${esc(activeAlias)}</span>`}
+    <div class="turn-indicator ${(isMyTurn && !mySetsDone) ? 'your-turn pulsing' : ''}">
+      ${simultaneous
+        ? (mySetsDone ? '⏳ Waiting for others...' : '🏋️ EVERYONE LIFTS')
+        : (isMyTurn
+          ? '🏋️ YOUR TURN'
+          : `Waiting for <span class="name">${esc(activeAlias)}</span>`)}
     </div>
 
     <div class="weight-display">
@@ -942,7 +987,7 @@ function renderSession(container) {
       }).join('')}
     </div>
 
-    ${isMyTurn ? `
+    ${(isMyTurn && !mySetsDone) ? `
       <div style="margin:16px 0;display:flex;flex-direction:column;gap:8px;align-items:center">
         <button class="btn btn-primary btn-large" id="doneBtn">
           DONE — Set ${currentSetNum}/${maxSets}
@@ -953,7 +998,7 @@ function renderSession(container) {
       </div>
     ` : `
       <div style="margin:16px 0;text-align:center">
-        <div class="muted">Wait for your turn...</div>
+        <div class="muted">${mySetsDone ? 'All sets done — waiting for others' : 'Wait for your turn...'}</div>
       </div>
     `}
 
@@ -972,7 +1017,7 @@ function renderSession(container) {
                 <div class="timer-bar-fill" data-uid="${uid}" style="width:${Math.min(t / 300, 1) * 100}%"></div>
               </div>
               <div class="timer-value" data-uid="${uid}">${formatTime(t)}</div>
-              <div class="timer-status">${isActive ? 'UP NEXT' : (t > 0 ? 'resting' : 'ready')}</div>
+              <div class="timer-status">${simultaneous ? (t > 0 ? 'resting' : '') : (isActive ? 'UP NEXT' : (t > 0 ? 'resting' : 'ready'))}</div>
             </div>
           `;
         }).join('')}
@@ -1008,7 +1053,7 @@ function renderSession(container) {
     </div>
   `;
 
-  if (isMyTurn) {
+  if (isMyTurn && !mySetsDone) {
     container.querySelector('#doneBtn')?.addEventListener('click', () => logSet(true));
     container.querySelector('#failBtn')?.addEventListener('click', () => logSet(false));
   }
@@ -1019,9 +1064,16 @@ function renderSessionSummary(container) {
   const exercises = WORKOUTS[activeSession.workout_type];
   const nextWorkout = activeSession.workout_type === 'A' ? 'B' : 'A';
 
+  const myAlias = getUser()?.alias || 'team';
   container.innerHTML = `
     <div class="splash-content" style="animation:none">
       <h2>Workout ${activeSession.workout_type} Complete!</h2>
+      <div style="display:flex;align-items:flex-start;justify-content:center;gap:12px;margin:16px 0">
+        <img src="icons/icon-192.png" alt="" style="width:64px;height:64px;border-radius:50%;flex-shrink:0" />
+        <div style="background:var(--card-bg);border:1px solid var(--orange);border-radius:12px 12px 12px 2px;padding:10px 14px;font-size:15px;color:var(--text-color)">
+          Good job, ${esc(myAlias)}!
+        </div>
+      </div>
       <p class="muted">Next session: Workout ${nextWorkout}</p>
     </div>
 

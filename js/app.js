@@ -14,23 +14,44 @@ let activeGroupId = null; // track which group we're in a session for
 // restores position. Fixes all handler/token/realtime issues.
 let wasHidden = false;
 
+function saveResumeState() {
+  if (getUser()) {
+    sessionStorage.setItem('fubz_resume', JSON.stringify({
+      page: currentPage || 'groups',
+      groupId: activeGroupId,
+    }));
+  }
+}
+
+function invisibleReload() {
+  document.body.style.transition = 'none';
+  document.body.style.opacity = '0';
+  window.location.reload();
+}
+
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
     wasHidden = true;
-    // Save state before we go
-    if (getUser()) {
-      sessionStorage.setItem('fubz_resume', JSON.stringify({
-        page: currentPage || 'groups',
-        groupId: activeGroupId,
-      }));
-    }
+    saveResumeState();
   } else if (wasHidden) {
-    // Tab just became visible after being hidden — reload
     wasHidden = false;
-    // Hide instantly before reload so there's no visible flash
-    document.body.style.transition = 'none';
-    document.body.style.opacity = '0';
-    window.location.reload();
+    invisibleReload();
+  }
+});
+
+// iOS Safari: pageshow fires when restoring from BFCache (app switcher)
+window.addEventListener('pageshow', (e) => {
+  if (e.persisted) {
+    saveResumeState();
+    invisibleReload();
+  }
+});
+
+// Fallback: window focus after being hidden (covers edge cases on iOS/Android)
+window.addEventListener('focus', () => {
+  if (wasHidden) {
+    wasHidden = false;
+    invisibleReload();
   }
 });
 

@@ -17,6 +17,7 @@ let realtimeChannel = null;
 let onSessionEnd = null;
 
 let groupOwnerId = null; // the group's actual owner
+let lastExercise = null; // track exercise for splash detection
 // visibilityHandler removed — app.js invisible reload handles tab resume
 let lobbyContainer = null; // ref for visibility reconnect
 
@@ -140,6 +141,17 @@ export async function startSession(groupId, container, onEnd) {
 
 /** Load set logs and start timers for an active session */
 async function loadSessionState(container) {
+  // Reload all members' weights so everyone sees correct weight for each lifter
+  const { data: weights } = await supabase
+    .from('profile_weights')
+    .select('*')
+    .in('user_id', activeSession.turn_order);
+  memberWeights = {};
+  (weights || []).forEach(w => {
+    if (!memberWeights[w.user_id]) memberWeights[w.user_id] = {};
+    memberWeights[w.user_id][w.exercise] = w.weight_lbs;
+  });
+
   const { data: logs } = await supabase
     .from('set_logs')
     .select('*')
@@ -149,6 +161,7 @@ async function loadSessionState(container) {
 
   timers = {};
   activeSession.turn_order.forEach(uid => { timers[uid] = 0; });
+  lastExercise = activeSession.current_exercise;
   startTimerTick(container);
   renderSession(container);
 }
@@ -181,9 +194,22 @@ function setupRealtimeChannel(container) {
       } else if (activeSession.status === 'active' && prevStatus === 'lobby') {
         lobbyRendered = false;
         await loadSessionState(container);
+        lastExercise = activeSession.current_exercise;
       } else if (activeSession.status === 'active') {
-        renderSession(container);
+        // Check if exercise changed — show splash for all clients
+        const newExercise = activeSession.current_exercise;
+        if (lastExercise && newExercise !== lastExercise) {
+          const completedExercise = lastExercise;
+          lastExercise = newExercise;
+          showExerciseSplash(completedExercise, () => renderSession(container));
+        } else {
+          lastExercise = newExercise;
+          renderSession(container);
+        }
       } else if (activeSession.status === 'lobby') {
+        // Refresh member list so new joiners have correct aliases
+        const members = await getGroupMembers(activeSession.group_id);
+        sessionMembers = members;
         renderLobby(container);
       }
     })
@@ -718,21 +744,29 @@ async function logSet(success) {
   const myLogs = setLogs.filter(l => l.user_id === user.id && l.exercise === exercise);
   const setNumber = myLogs.length + 1;
 
-  const { data: log, error } = await supabase
-    .from('set_logs')
-    .insert({
-      session_id: activeSession.id,
-      user_id: user.id,
-      exercise,
-      set_number: setNumber,
-      reps: 5,
-      weight_lbs: weight,
-      success,
-    })
-    .select()
-    .single();
+  let log, error;
+  try {
+    const result = await supabase
+      .from('set_logs')
+      .insert({
+        session_id: activeSession.id,
+        user_id: user.id,
+        exercise,
+        set_number: setNumber,
+        reps: 5,
+        weight_lbs: weight,
+        success,
+      })
+      .select()
+      .single();
+    log = result.data;
+    error = result.error;
+  } catch (e) {
+    toast('Connection lost — tap to retry after reconnecting');
+    return;
+  }
 
-  if (error) { toast(error.message); return; }
+  if (error) { toast('Failed to log set — check connection'); return; }
 
   if (!setLogs.find(l => l.id === log.id)) setLogs.push(log);
   timers[user.id] = 0;
@@ -756,15 +790,13 @@ async function advanceTurn() {
     const currentIdx = exercises.indexOf(exercise);
     if (currentIdx < exercises.length - 1) {
       const nextExercise = exercises[currentIdx + 1];
-      showExerciseSplash(exercise, () => {
-        supabase.from('sessions').update({
-          current_exercise: nextExercise,
-          current_turn_index: 0,
-          current_set: 1,
-        }).eq('id', activeSession.id).then(() => {
-          activeSession.turn_order.forEach(uid => { timers[uid] = 0; });
-        });
-      });
+      // Update DB immediately — realtime handler shows splash for ALL clients
+      await supabase.from('sessions').update({
+        current_exercise: nextExercise,
+        current_turn_index: 0,
+        current_set: 1,
+      }).eq('id', activeSession.id);
+      activeSession.turn_order.forEach(uid => { timers[uid] = 0; });
     } else {
       await endSession();
     }
@@ -1035,6 +1067,7 @@ export function cleanupSession() {
   lobbyContainer = null;
   hostUsurped = false;
   pendingUsurpType = null;
+  lastExercise = null;
   setLogs = [];
   timers = {};
 }

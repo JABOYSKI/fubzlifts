@@ -827,13 +827,22 @@ function showExerciseSplash(exercise, onDone) {
     <div class="splash-content">
       <h2>${EXERCISE_NAMES[exercise]} Complete!</h2>
       <p>Great work, team. Next exercise loading...</p>
+      <p class="muted" style="font-size:12px;margin-top:16px">Tap anywhere to continue</p>
     </div>
   `;
   document.body.appendChild(splash);
-  setTimeout(() => {
+
+  let dismissed = false;
+  const dismiss = () => {
+    if (dismissed) return;
+    dismissed = true;
+    clearTimeout(autoTimer);
     splash.remove();
     onDone();
-  }, 2000);
+  };
+
+  splash.addEventListener('click', dismiss);
+  const autoTimer = setTimeout(dismiss, 10000);
 }
 
 /** End the session */

@@ -1108,11 +1108,38 @@ function renderSession(container) {
   const extraVoteCount = activeSession.turn_order.filter(uid => extraVotes[uid]).length;
   const extraSetActive = activeSession.turn_order.every(uid => extraVotes[uid]);
 
+  // Build vote pips HTML
+  const votePipsHtml = activeSession.turn_order.map(uid =>
+    `<span class="vote-pip ${extraVotes[uid] ? 'lit' : ''}"></span>`
+  ).join('');
+
   container.innerHTML = `
-    <div class="exercise-banner">
+    <div class="exercise-banner" id="exerciseBanner" style="cursor:pointer">
       <div class="exercise-meta">Workout ${activeSession.workout_type} · ${exercises.indexOf(exercise) + 1}/${exercises.length}</div>
       <div class="exercise-name">${exerciseName}</div>
       <div class="exercise-meta">${maxSets} × 5 reps</div>
+      <div class="claw-drawer" id="clawDrawer">
+        <button class="claw-btn ${iVotedExtra ? 'voted' : ''}" id="clawVoteBtn" ${iVotedExtra || extraSetActive ? 'disabled' : ''}>
+          <svg viewBox="0 0 120 100" fill="none" xmlns="http://www.w3.org/2000/svg" class="claw-svg">
+            <!-- Tiger paw base -->
+            <ellipse cx="60" cy="62" rx="32" ry="26" fill="#C0392B"/>
+            <!-- Toes -->
+            <ellipse cx="30" cy="42" rx="11" ry="14" fill="#C0392B"/>
+            <ellipse cx="50" cy="34" rx="10" ry="13" fill="#C0392B"/>
+            <ellipse cx="70" cy="34" rx="10" ry="13" fill="#C0392B"/>
+            <ellipse cx="90" cy="42" rx="11" ry="14" fill="#C0392B"/>
+            <!-- Claws -->
+            <path d="M22 28C18 18 20 8 26 4C24 14 24 22 28 30" fill="#333"/>
+            <path d="M44 22C42 12 44 2 50 0C46 10 46 16 48 24" fill="#333"/>
+            <path d="M66 22C64 12 66 2 72 0C68 10 68 16 70 24" fill="#333"/>
+            <path d="M88 28C84 18 86 8 92 4C88 14 88 22 92 30" fill="#333"/>
+            <!-- Stripes on paw -->
+            <path d="M45 55C50 50 55 52 58 58" stroke="#8B1A1A" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+            <path d="M55 60C60 55 67 56 72 62" stroke="#8B1A1A" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+          </svg>
+        </button>
+        ${extraVoteCount > 0 || extraSetActive ? `<div class="vote-pips">${votePipsHtml}</div>` : ''}
+      </div>
     </div>
 
     <div class="turn-indicator ${(isMyTurn && !mySetsDone) ? 'your-turn pulsing' : ''}">
@@ -1154,19 +1181,6 @@ function renderSession(container) {
       </div>
     `}
 
-    ${!extraSetActive ? `
-      <div style="text-align:center;margin:4px 0 12px">
-        <button class="extra-set-btn ${iVotedExtra ? 'voted' : ''}" id="extraSetBtn" ${iVotedExtra ? 'disabled' : ''}>
-          <svg class="claw-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round">
-            <path d="M6 3C5 8 5.5 14 7 20"/>
-            <path d="M12 2C12 8 12 14 12 20"/>
-            <path d="M18 3C19 8 18.5 14 17 20"/>
-          </svg>
-          ${iVotedExtra ? 'VOTED' : '+1 SET'} (${extraVoteCount}/${activeSession.turn_order.length})
-        </button>
-      </div>
-    ` : ''}
-
     <div class="section">
       <h3>Rest Timers</h3>
       <div class="timer-stack">
@@ -1206,8 +1220,9 @@ function renderSession(container) {
                 ${Array.from({ length: maxSets }, (_, i) => {
                   const log = userLogs[i];
                   let cls = '';
-                  if (log && log.success) cls = 'done';
-                  else if (log && !log.success) cls = 'fail';
+                  const isNewest = i === userLogs.length - 1;
+                  if (log && log.success) cls = 'done' + (isNewest ? ' gleam' : '');
+                  else if (log && !log.success) cls = 'fail' + (isNewest ? ' gleam' : '');
                   return `<div class="set-dot ${cls}" style="width:20px;height:20px;font-size:9px">${i + 1}</div>`;
                 }).join('')}
               </div>
@@ -1223,17 +1238,43 @@ function renderSession(container) {
     container.querySelector('#failBtn')?.addEventListener('click', () => logSet(false));
   }
 
-  // Extra set vote handler (inline button)
-  const extraBtn = container.querySelector('#extraSetBtn');
-  if (extraBtn && !iVotedExtra) {
-    extraBtn.addEventListener('click', async () => {
+  // Banner tap → toggle claw drawer
+  const banner = container.querySelector('#exerciseBanner');
+  const drawer = container.querySelector('#clawDrawer');
+  if (banner && drawer) {
+    banner.addEventListener('click', (e) => {
+      // Don't toggle if they clicked the claw button itself
+      if (e.target.closest('#clawVoteBtn')) return;
+      drawer.classList.toggle('open');
+    });
+  }
+
+  // Claw vote handler
+  const clawBtn = container.querySelector('#clawVoteBtn');
+  if (clawBtn && !iVotedExtra && !extraSetActive) {
+    clawBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
       const votes = { ...(activeSession.lobby_state?.extra_set_votes || {}) };
       votes[exercise] = { ...(votes[exercise] || {}), [user.id]: true };
       const ls = { ...activeSession.lobby_state, extra_set_votes: votes };
       activeSession.lobby_state = ls;
-      extraBtn.classList.add('voted');
-      extraBtn.disabled = true;
-      extraBtn.textContent = `VOTED (${extraVoteCount + 1}/${activeSession.turn_order.length})`;
+      clawBtn.classList.add('voted');
+      clawBtn.disabled = true;
+      // Show pips immediately
+      const pipsContainer = drawer.querySelector('.vote-pips');
+      if (!pipsContainer) {
+        const pipsDiv = document.createElement('div');
+        pipsDiv.className = 'vote-pips';
+        pipsDiv.innerHTML = activeSession.turn_order.map(uid =>
+          `<span class="vote-pip ${votes[exercise]?.[uid] ? 'lit' : ''}"></span>`
+        ).join('');
+        drawer.appendChild(pipsDiv);
+      } else {
+        pipsContainer.innerHTML = activeSession.turn_order.map(uid =>
+          `<span class="vote-pip ${votes[exercise]?.[uid] ? 'lit' : ''}"></span>`
+        ).join('');
+      }
+      drawer.classList.add('open');
       await supabase.from('sessions').update({ lobby_state: ls }).eq('id', activeSession.id);
     });
   }

@@ -515,6 +515,10 @@ function patchLobby(container, state) {
         btn.classList.toggle('btn-primary', btn.dataset.type === winningVote);
       });
       if (dlGroup) dlGroup.style.display = winningVote === 'B' ? '' : 'none';
+      container.querySelectorAll('.admin-toggle-sim').forEach(btn => {
+        const ex = btn.dataset.exercise;
+        btn.style.display = (ex === 'row' && winningVote === 'A') || (ex === 'deadlift' && winningVote === 'B') ? '' : 'none';
+      });
       supabase.from('sessions').update({ workout_type: winningVote }).eq('id', activeSession.id);
     }
   } else {
@@ -581,6 +585,10 @@ function setupLobbyDelegation(container) {
         });
         const dlG = container.querySelector('#adminDlGroup');
         if (dlG) dlG.style.display = type === 'B' ? '' : 'none';
+        container.querySelectorAll('.admin-toggle-sim').forEach(btn => {
+          const ex = btn.dataset.exercise;
+          btn.style.display = (ex === 'row' && type === 'A') || (ex === 'deadlift' && type === 'B') ? '' : 'none';
+        });
         supabase.from('sessions').update({ workout_type: type }).eq('id', activeSession.id);
       }
       return;
@@ -597,9 +605,13 @@ function setupLobbyDelegation(container) {
         container.querySelectorAll('.admin-set-workout').forEach(btn => {
           btn.classList.toggle('btn-primary', btn.dataset.type === pendingUsurpType);
         });
-        // Show/hide DL sets based on new type
+        // Show/hide DL sets and simultaneous buttons based on new type
         const dlGroup = container.querySelector('#adminDlGroup');
         if (dlGroup) dlGroup.style.display = pendingUsurpType === 'B' ? '' : 'none';
+        container.querySelectorAll('.admin-toggle-sim').forEach(btn => {
+          const ex = btn.dataset.exercise;
+          btn.style.display = (ex === 'row' && pendingUsurpType === 'A') || (ex === 'deadlift' && pendingUsurpType === 'B') ? '' : 'none';
+        });
         supabase.from('sessions').update({ workout_type: pendingUsurpType }).eq('id', activeSession.id);
         pendingUsurpType = null;
       }
@@ -687,6 +699,7 @@ async function adminStartSession(container) {
     const { error } = await supabase.from('sessions').update({
       status: 'active',
       workout_type: activeSession.workout_type,
+      lobby_state: activeSession.lobby_state,
       current_exercise: exercises[0],
       current_turn_index: 0,
       current_set: 1,
@@ -853,29 +866,65 @@ async function advanceTurn() {
   }).eq('id', activeSession.id);
 }
 
-/** Show congratulatory splash between exercises */
+/** Show congratulatory splash between exercises — retro RPG dialogue style */
 function showExerciseSplash(exercise, onDone) {
-  const alias = getUser()?.alias || 'team';
+  const message = 'Good job, Maria!!!';
   const splash = document.createElement('div');
   splash.className = 'splash-overlay';
   splash.innerHTML = `
+    <style>
+      @keyframes catBounce {
+        0%, 100% { transform: translateY(0); }
+        25% { transform: translateY(-6px) rotate(-3deg); }
+        50% { transform: translateY(-2px); }
+        75% { transform: translateY(-8px) rotate(3deg); }
+      }
+      .splash-cat {
+        width: 72px; height: 72px; border-radius: 50%; flex-shrink: 0;
+        animation: catBounce 1.2s ease-in-out infinite;
+      }
+      .splash-bubble {
+        background: var(--card-bg); border: 2px solid var(--orange);
+        border-radius: 14px 14px 14px 2px; padding: 12px 16px;
+        font-family: monospace; font-size: 17px; color: var(--orange);
+        min-height: 1.4em; letter-spacing: 1px;
+      }
+      .splash-bubble .cursor {
+        display: inline-block; width: 2px; height: 1em;
+        background: var(--orange); margin-left: 2px;
+        animation: blink 0.5s step-end infinite;
+        vertical-align: text-bottom;
+      }
+      @keyframes blink { 50% { opacity: 0; } }
+    </style>
     <div class="splash-content">
       <h2>${EXERCISE_NAMES[exercise]} Complete!</h2>
-      <div style="display:flex;align-items:flex-start;justify-content:center;gap:12px;margin:20px 0">
-        <img src="icons/icon-192.png" alt="" style="width:64px;height:64px;border-radius:50%;flex-shrink:0" />
-        <div style="background:var(--card-bg);border:1px solid var(--orange);border-radius:12px 12px 12px 2px;padding:10px 14px;font-size:15px;color:var(--text-color)">
-          Good job, ${esc(alias)}!
-        </div>
+      <div style="display:flex;align-items:flex-start;justify-content:center;gap:14px;margin:24px 0">
+        <img src="icons/icon-192.png" alt="" class="splash-cat" />
+        <div class="splash-bubble"><span id="splashText"></span><span class="cursor"></span></div>
       </div>
-      <p class="muted" style="font-size:12px;margin-top:12px">Tap anywhere to continue</p>
+      <p class="muted" style="font-size:12px;margin-top:14px">Tap anywhere to continue</p>
     </div>
   `;
   document.body.appendChild(splash);
+
+  // Typewriter effect
+  const textEl = splash.querySelector('#splashText');
+  let charIdx = 0;
+  const typeInterval = setInterval(() => {
+    if (charIdx < message.length) {
+      textEl.textContent += message[charIdx];
+      charIdx++;
+    } else {
+      clearInterval(typeInterval);
+    }
+  }, 65);
 
   let dismissed = false;
   const dismiss = () => {
     if (dismissed) return;
     dismissed = true;
+    clearInterval(typeInterval);
     clearTimeout(autoTimer);
     splash.remove();
     onDone();
@@ -1064,15 +1113,38 @@ function renderSessionSummary(container) {
   const exercises = WORKOUTS[activeSession.workout_type];
   const nextWorkout = activeSession.workout_type === 'A' ? 'B' : 'A';
 
-  const myAlias = getUser()?.alias || 'team';
+  const summaryMessage = 'Good job, Maria!!!';
   container.innerHTML = `
+    <style>
+      @keyframes catBounce {
+        0%, 100% { transform: translateY(0); }
+        25% { transform: translateY(-6px) rotate(-3deg); }
+        50% { transform: translateY(-2px); }
+        75% { transform: translateY(-8px) rotate(3deg); }
+      }
+      .summary-cat {
+        width: 72px; height: 72px; border-radius: 50%; flex-shrink: 0;
+        animation: catBounce 1.2s ease-in-out infinite;
+      }
+      .summary-bubble {
+        background: var(--card-bg); border: 2px solid var(--orange);
+        border-radius: 14px 14px 14px 2px; padding: 12px 16px;
+        font-family: monospace; font-size: 17px; color: var(--orange);
+        min-height: 1.4em; letter-spacing: 1px;
+      }
+      .summary-bubble .cursor {
+        display: inline-block; width: 2px; height: 1em;
+        background: var(--orange); margin-left: 2px;
+        animation: blink 0.5s step-end infinite;
+        vertical-align: text-bottom;
+      }
+      @keyframes blink { 50% { opacity: 0; } }
+    </style>
     <div class="splash-content" style="animation:none">
       <h2>Workout ${activeSession.workout_type} Complete!</h2>
-      <div style="display:flex;align-items:flex-start;justify-content:center;gap:12px;margin:16px 0">
-        <img src="icons/icon-192.png" alt="" style="width:64px;height:64px;border-radius:50%;flex-shrink:0" />
-        <div style="background:var(--card-bg);border:1px solid var(--orange);border-radius:12px 12px 12px 2px;padding:10px 14px;font-size:15px;color:var(--text-color)">
-          Good job, ${esc(myAlias)}!
-        </div>
+      <div style="display:flex;align-items:flex-start;justify-content:center;gap:14px;margin:20px 0">
+        <img src="icons/icon-192.png" alt="" class="summary-cat" />
+        <div class="summary-bubble"><span id="summaryText"></span><span class="cursor"></span></div>
       </div>
       <p class="muted">Next session: Workout ${nextWorkout}</p>
     </div>
@@ -1106,7 +1178,20 @@ function renderSessionSummary(container) {
     </button>
   `;
 
+  // Typewriter effect for summary
+  const summaryTextEl = container.querySelector('#summaryText');
+  let sIdx = 0;
+  const summaryType = setInterval(() => {
+    if (sIdx < summaryMessage.length) {
+      summaryTextEl.textContent += summaryMessage[sIdx];
+      sIdx++;
+    } else {
+      clearInterval(summaryType);
+    }
+  }, 65);
+
   container.querySelector('#backToGroupsBtn')?.addEventListener('click', () => {
+    clearInterval(summaryType);
     activeSession = null;
     if (onSessionEnd) onSessionEnd();
   });

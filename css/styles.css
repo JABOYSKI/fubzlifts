@@ -525,6 +525,7 @@ body { padding-bottom: 60px; }
   padding: 6px 14px; border-radius: 12px;
   animation: pipsIgnite 2s ease-out;
 }
+.vote-pips.no-ignite { animation: none; }
 @keyframes pipsIgnite {
   0%   { opacity: 0; transform: scale(0.5); box-shadow: 0 0 0 transparent; }
   10%  { opacity: 1; transform: scale(1.15); box-shadow: 0 0 20px rgba(255,100,0,0.8), 0 0 40px rgba(255,60,0,0.5), 0 -8px 24px rgba(255,200,0,0.6); }
@@ -542,6 +543,9 @@ body { padding-bottom: 60px; }
   background: #C0392B;
   box-shadow: 0 0 6px rgba(192,57,43,0.6);
   animation: pipFire 1.5s ease-out;
+}
+.vote-pip.lit.steady {
+  animation: none;
 }
 @keyframes pipFire {
   0%   { box-shadow: 0 0 4px #C0392B, 0 0 8px #E74C3C, 0 0 16px rgba(255,100,20,0.7), 0 -4px 12px rgba(255,180,0,0.5); transform: scale(1.6); }

@@ -20,6 +20,7 @@ let groupOwnerId = null; // the group's actual owner
 let lastExercise = null; // track exercise for splash detection
 let extraSetSplashShown = {}; // track which exercises already showed the +1 splash
 let lastSetUserId = null; // track who just completed a set (for gleam animation)
+let lastExtraVoteCount = 0; // track vote count to only animate pips on change
 // visibilityHandler removed — app.js invisible reload handles tab resume
 let lobbyContainer = null; // ref for visibility reconnect
 
@@ -589,7 +590,7 @@ function setupLobbyDelegation(container) {
     container.removeEventListener('click', container._lobbyClickHandler);
   }
 
-  container._lobbyClickHandler = (e) => {
+  container._lobbyClickHandler = async (e) => {
     const target = e.target.closest('button');
     if (!target) return;
     console.warn('[FubzLifts] Lobby click:', target.id || target.className);
@@ -636,7 +637,7 @@ function setupLobbyDelegation(container) {
           const ex = btn.dataset.exercise;
           btn.style.display = (ex === 'row' && type === 'A') || (ex === 'deadlift' && type === 'B') ? '' : 'none';
         });
-        supabase.from('sessions').update({ workout_type: type }).eq('id', activeSession.id);
+        await supabase.from('sessions').update({ workout_type: type }).eq('id', activeSession.id);
       }
       return;
     }
@@ -659,7 +660,7 @@ function setupLobbyDelegation(container) {
           const ex = btn.dataset.exercise;
           btn.style.display = (ex === 'row' && pendingUsurpType === 'A') || (ex === 'deadlift' && pendingUsurpType === 'B') ? '' : 'none';
         });
-        supabase.from('sessions').update({ workout_type: pendingUsurpType }).eq('id', activeSession.id);
+        await supabase.from('sessions').update({ workout_type: pendingUsurpType }).eq('id', activeSession.id);
         pendingUsurpType = null;
       }
       return;
@@ -680,7 +681,7 @@ function setupLobbyDelegation(container) {
       container.querySelectorAll('.admin-set-dl').forEach(b => {
         b.classList.toggle('btn-primary', parseInt(b.dataset.sets) === parseInt(target.dataset.sets));
       });
-      supabase.from('sessions').update({ lobby_state: ls }).eq('id', activeSession.id);
+      await supabase.from('sessions').update({ lobby_state: ls }).eq('id', activeSession.id);
       return;
     }
 
@@ -691,7 +692,7 @@ function setupLobbyDelegation(container) {
       const ls = { ...activeSession.lobby_state, simultaneous: sim };
       activeSession.lobby_state = ls;
       target.classList.toggle('btn-primary');
-      supabase.from('sessions').update({ lobby_state: ls }).eq('id', activeSession.id);
+      await supabase.from('sessions').update({ lobby_state: ls }).eq('id', activeSession.id);
       return;
     }
 
@@ -1126,9 +1127,11 @@ function renderSession(container) {
   const extraVoteCount = activeSession.turn_order.filter(uid => extraVotes[uid]).length;
   const extraSetActive = activeSession.turn_order.every(uid => extraVotes[uid]);
 
-  // Build vote pips HTML
+  // Build vote pips HTML — only animate when vote count actually changed
+  const pipsChanged = extraVoteCount !== lastExtraVoteCount;
+  if (pipsChanged) lastExtraVoteCount = extraVoteCount;
   const votePipsHtml = activeSession.turn_order.map(uid =>
-    `<span class="vote-pip ${extraVotes[uid] ? 'lit' : ''}"></span>`
+    `<span class="vote-pip ${extraVotes[uid] ? (pipsChanged ? 'lit' : 'lit steady') : ''}"></span>`
   ).join('');
 
   container.innerHTML = `
@@ -1138,23 +1141,23 @@ function renderSession(container) {
       <div class="exercise-meta">${maxSets} × 5 reps</div>
       <div class="claw-drawer" id="clawDrawer">
         <button class="claw-btn ${iVotedExtra ? 'voted' : ''}" id="clawVoteBtn" ${iVotedExtra || extraSetActive ? 'disabled' : ''}>
-          <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="claw-svg">
-            <!-- Claws — thick, prominent, visible at small sizes -->
-            <path d="M18 24L12 4L24 20Z" fill="#8B1A1A"/>
-            <path d="M38 14L34 -6L46 12Z" fill="#8B1A1A"/>
-            <path d="M62 14L58 -6L70 12Z" fill="#8B1A1A"/>
-            <path d="M82 24L78 4L90 20Z" fill="#8B1A1A"/>
+          <svg viewBox="0 0 100 105" xmlns="http://www.w3.org/2000/svg" class="claw-svg">
             <!-- Toe pads -->
-            <ellipse cx="22" cy="32" rx="11" ry="14" fill="#C0392B"/>
-            <ellipse cx="42" cy="22" rx="10" ry="13" fill="#C0392B"/>
-            <ellipse cx="58" cy="22" rx="10" ry="13" fill="#C0392B"/>
-            <ellipse cx="78" cy="32" rx="11" ry="14" fill="#C0392B"/>
+            <ellipse cx="22" cy="38" rx="11" ry="13" fill="#C0392B"/>
+            <ellipse cx="42" cy="28" rx="10" ry="12" fill="#C0392B"/>
+            <ellipse cx="58" cy="28" rx="10" ry="12" fill="#C0392B"/>
+            <ellipse cx="78" cy="38" rx="11" ry="13" fill="#C0392B"/>
             <!-- Main pad -->
-            <path d="M50 95C28 95 14 82 14 68C14 54 30 46 50 46C70 46 86 54 86 68C86 82 72 95 50 95Z" fill="#C0392B"/>
+            <path d="M50 98C28 98 14 85 14 72C14 58 30 50 50 50C70 50 86 58 86 72C86 85 72 98 50 98Z" fill="#C0392B"/>
+            <!-- Claws — drawn ON TOP so they layer over toe edges -->
+            <path d="M14 26C16 16 20 8 22 4C22 12 20 20 18 28" fill="#E74C3C" stroke="#E74C3C" stroke-width="1"/>
+            <path d="M36 16C38 6 42 -2 44 -5C43 4 40 12 38 18" fill="#E74C3C" stroke="#E74C3C" stroke-width="1"/>
+            <path d="M56 16C58 6 62 -2 64 -5C63 4 60 12 58 18" fill="#E74C3C" stroke="#E74C3C" stroke-width="1"/>
+            <path d="M80 26C82 16 86 8 88 4C86 12 84 20 82 28" fill="#E74C3C" stroke="#E74C3C" stroke-width="1"/>
           </svg>
         </button>
       </div>
-      ${extraVoteCount > 0 || extraSetActive ? `<div class="vote-pips" style="margin-top:8px">${votePipsHtml}</div>` : ''}
+      ${extraVoteCount > 0 || extraSetActive ? `<div class="vote-pips ${pipsChanged ? '' : 'no-ignite'}" style="margin-top:8px">${votePipsHtml}</div>` : ''}
     </div>
 
     <div class="turn-indicator ${(isMyTurn && !mySetsDone) ? 'your-turn pulsing' : ''}">
@@ -1403,6 +1406,7 @@ export function cleanupSession() {
   lastExercise = null;
   extraSetSplashShown = {};
   lastSetUserId = null;
+  lastExtraVoteCount = 0;
   setLogs = [];
   timers = {};
 }

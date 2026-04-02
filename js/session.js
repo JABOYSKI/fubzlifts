@@ -1120,26 +1120,37 @@ function renderSession(container) {
       <div class="exercise-meta">${maxSets} × 5 reps</div>
       <div class="claw-drawer" id="clawDrawer">
         <button class="claw-btn ${iVotedExtra ? 'voted' : ''}" id="clawVoteBtn" ${iVotedExtra || extraSetActive ? 'disabled' : ''}>
-          <svg viewBox="0 0 120 100" fill="none" xmlns="http://www.w3.org/2000/svg" class="claw-svg">
-            <!-- Tiger paw base -->
-            <ellipse cx="60" cy="62" rx="32" ry="26" fill="#C0392B"/>
+          <svg viewBox="0 0 120 110" fill="none" xmlns="http://www.w3.org/2000/svg" class="claw-svg">
+            <!-- Claws — long, curved, sharp -->
+            <path d="M18 30C12 16 14 2 22 -4L20 0C16 8 17 18 22 28Z" fill="#2C2C2C"/>
+            <path d="M15 32C10 18 13 0 24 -6L21 -1C16 8 16 20 21 30Z" fill="#444"/>
+            <path d="M40 20C36 6 39 -8 48 -12L45 -6C40 4 40 12 44 20Z" fill="#2C2C2C"/>
+            <path d="M37 22C34 8 38 -6 50 -14L46 -8C40 2 39 14 43 22Z" fill="#444"/>
+            <path d="M64 20C60 6 63 -8 72 -12L69 -6C64 4 64 12 68 20Z" fill="#2C2C2C"/>
+            <path d="M61 22C58 8 62 -6 74 -14L70 -8C64 2 63 14 67 22Z" fill="#444"/>
+            <path d="M88 30C82 16 84 2 92 -4L90 0C86 8 87 18 92 28Z" fill="#2C2C2C"/>
+            <path d="M85 32C80 18 83 0 94 -6L91 -1C86 8 86 20 91 30Z" fill="#444"/>
             <!-- Toes -->
-            <ellipse cx="30" cy="42" rx="11" ry="14" fill="#C0392B"/>
-            <ellipse cx="50" cy="34" rx="10" ry="13" fill="#C0392B"/>
-            <ellipse cx="70" cy="34" rx="10" ry="13" fill="#C0392B"/>
-            <ellipse cx="90" cy="42" rx="11" ry="14" fill="#C0392B"/>
-            <!-- Claws -->
-            <path d="M22 28C18 18 20 8 26 4C24 14 24 22 28 30" fill="#333"/>
-            <path d="M44 22C42 12 44 2 50 0C46 10 46 16 48 24" fill="#333"/>
-            <path d="M66 22C64 12 66 2 72 0C68 10 68 16 70 24" fill="#333"/>
-            <path d="M88 28C84 18 86 8 92 4C88 14 88 22 92 30" fill="#333"/>
-            <!-- Stripes on paw -->
-            <path d="M45 55C50 50 55 52 58 58" stroke="#8B1A1A" stroke-width="2.5" stroke-linecap="round" fill="none"/>
-            <path d="M55 60C60 55 67 56 72 62" stroke="#8B1A1A" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+            <ellipse cx="30" cy="46" rx="13" ry="16" fill="#C0392B"/>
+            <ellipse cx="52" cy="38" rx="12" ry="15" fill="#C0392B"/>
+            <ellipse cx="68" cy="38" rx="12" ry="15" fill="#C0392B"/>
+            <ellipse cx="90" cy="46" rx="13" ry="16" fill="#C0392B"/>
+            <!-- Paw pad -->
+            <ellipse cx="60" cy="70" rx="34" ry="28" fill="#C0392B"/>
+            <!-- Toe pads (lighter) -->
+            <ellipse cx="30" cy="48" rx="7" ry="8" fill="#E8725C"/>
+            <ellipse cx="52" cy="40" rx="6" ry="7" fill="#E8725C"/>
+            <ellipse cx="68" cy="40" rx="6" ry="7" fill="#E8725C"/>
+            <ellipse cx="90" cy="48" rx="7" ry="8" fill="#E8725C"/>
+            <!-- Central pad -->
+            <ellipse cx="60" cy="72" rx="18" ry="14" fill="#E8725C"/>
+            <!-- Stripes -->
+            <path d="M42 62C48 56 54 58 58 65" stroke="#8B1A1A" stroke-width="2" stroke-linecap="round" fill="none"/>
+            <path d="M58 68C64 62 72 63 76 70" stroke="#8B1A1A" stroke-width="2" stroke-linecap="round" fill="none"/>
           </svg>
         </button>
-        ${extraVoteCount > 0 || extraSetActive ? `<div class="vote-pips">${votePipsHtml}</div>` : ''}
       </div>
+      ${extraVoteCount > 0 || extraSetActive ? `<div class="vote-pips" style="margin-top:8px">${votePipsHtml}</div>` : ''}
     </div>
 
     <div class="turn-indicator ${(isMyTurn && !mySetsDone) ? 'your-turn pulsing' : ''}">

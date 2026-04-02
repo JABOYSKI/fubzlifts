@@ -14,6 +14,7 @@ let setLogs = [];
 let timers = {};
 let timerInterval = null;
 let realtimeChannel = null;
+let heartbeatInterval = null;
 let onSessionEnd = null;
 
 let groupOwnerId = null; // the group's actual owner
@@ -218,9 +219,21 @@ async function loadSessionState(container) {
 /** Subscribe to real-time session updates + visibility reconnect */
 function subscribeToSession(container) {
   if (realtimeChannel) supabase.removeChannel(realtimeChannel);
+  clearInterval(heartbeatInterval);
   lobbyContainer = container;
 
   setupRealtimeChannel(container);
+
+  // Heartbeat: check realtime connection every 30s, reconnect if stale
+  heartbeatInterval = setInterval(() => {
+    if (!realtimeChannel || !activeSession) return;
+    const state = realtimeChannel.state;
+    if (state !== 'joined' && state !== 'joining') {
+      console.warn('[FubzLifts] Realtime channel stale, reconnecting...');
+      supabase.removeChannel(realtimeChannel);
+      setupRealtimeChannel(container);
+    }
+  }, 30000);
 }
 
 /** Wire up the Supabase realtime channel (separated so visibility handler can reconnect) */
@@ -1127,12 +1140,8 @@ function renderSession(container) {
   const extraVoteCount = activeSession.turn_order.filter(uid => extraVotes[uid]).length;
   const extraSetActive = activeSession.turn_order.every(uid => extraVotes[uid]);
 
-  // Build vote pips HTML — only animate when vote count actually changed
   const pipsChanged = extraVoteCount !== lastExtraVoteCount;
   if (pipsChanged) lastExtraVoteCount = extraVoteCount;
-  const votePipsHtml = activeSession.turn_order.map(uid =>
-    `<span class="vote-pip ${extraVotes[uid] ? (pipsChanged ? 'lit' : 'lit steady') : ''}"></span>`
-  ).join('');
 
   container.innerHTML = `
     <div class="exercise-banner" id="exerciseBanner" style="cursor:pointer">
@@ -1157,7 +1166,6 @@ function renderSession(container) {
           </svg>
         </button>
       </div>
-      ${extraVoteCount > 0 || extraSetActive ? `<div class="vote-pips ${pipsChanged ? '' : 'no-ignite'}" style="margin-top:8px">${votePipsHtml}</div>` : ''}
     </div>
 
     <div class="turn-indicator ${(isMyTurn && !mySetsDone) ? 'your-turn pulsing' : ''}">
@@ -1256,8 +1264,54 @@ function renderSession(container) {
     container.querySelector('#failBtn')?.addEventListener('click', () => logSet(false));
   }
 
-  // Banner tap → toggle claw drawer
+  // Manage vote pips as a persistent element to avoid flicker
   const banner = container.querySelector('#exerciseBanner');
+  if (extraVoteCount > 0 || extraSetActive) {
+    let pipsEl = document.getElementById('persistentPips');
+    if (!pipsEl) {
+      pipsEl = document.createElement('div');
+      pipsEl.id = 'persistentPips';
+      pipsEl.className = 'vote-pips';
+      pipsEl.style.marginTop = '8px';
+      activeSession.turn_order.forEach(uid => {
+        const pip = document.createElement('span');
+        pip.className = 'vote-pip' + (extraVotes[uid] ? ' lit' : '');
+        pip.dataset.uid = uid;
+        pipsEl.appendChild(pip);
+      });
+      banner.appendChild(pipsEl);
+    } else {
+      // Re-attach to new banner DOM and patch individual pips
+      banner.appendChild(pipsEl);
+      pipsEl.querySelectorAll('.vote-pip').forEach(pip => {
+        const uid = pip.dataset.uid;
+        const shouldBeLit = !!extraVotes[uid];
+        const isLit = pip.classList.contains('lit');
+        if (shouldBeLit && !isLit) {
+          // Newly lit — animate
+          pip.classList.add('lit');
+          pip.classList.remove('steady');
+        } else if (shouldBeLit && isLit) {
+          // Already lit — no re-animation
+          pip.classList.add('steady');
+        }
+      });
+      // Toggle container ignite
+      if (pipsChanged) {
+        pipsEl.classList.remove('no-ignite');
+        pipsEl.style.animation = 'none';
+        pipsEl.offsetHeight; // force reflow
+        pipsEl.style.animation = '';
+      } else {
+        pipsEl.classList.add('no-ignite');
+      }
+    }
+  } else {
+    const old = document.getElementById('persistentPips');
+    if (old) old.remove();
+  }
+
+  // Banner tap → toggle claw drawer
   const drawer = container.querySelector('#clawDrawer');
   if (banner && drawer) {
     banner.addEventListener('click', (e) => {
@@ -1278,20 +1332,29 @@ function renderSession(container) {
       activeSession.lobby_state = ls;
       clawBtn.classList.add('voted');
       clawBtn.disabled = true;
-      // Show pips immediately in the banner (outside drawer)
+      // Update persistent pips immediately
+      lastExtraVoteCount = extraVoteCount + 1;
+      let pipsEl = document.getElementById('persistentPips');
       const bannerEl = container.querySelector('#exerciseBanner');
-      let pipsContainer = bannerEl.querySelector('.vote-pips');
-      const pipsHtml = activeSession.turn_order.map(uid =>
-        `<span class="vote-pip ${votes[exercise]?.[uid] ? 'lit' : ''}"></span>`
-      ).join('');
-      if (!pipsContainer) {
-        const pipsDiv = document.createElement('div');
-        pipsDiv.className = 'vote-pips';
-        pipsDiv.style.marginTop = '8px';
-        pipsDiv.innerHTML = pipsHtml;
-        bannerEl.appendChild(pipsDiv);
+      if (!pipsEl) {
+        pipsEl = document.createElement('div');
+        pipsEl.id = 'persistentPips';
+        pipsEl.className = 'vote-pips';
+        pipsEl.style.marginTop = '8px';
+        activeSession.turn_order.forEach(uid => {
+          const pip = document.createElement('span');
+          pip.className = 'vote-pip' + (votes[exercise]?.[uid] ? ' lit' : '');
+          pip.dataset.uid = uid;
+          pipsEl.appendChild(pip);
+        });
+        bannerEl.appendChild(pipsEl);
       } else {
-        pipsContainer.innerHTML = pipsHtml;
+        pipsEl.querySelectorAll('.vote-pip').forEach(pip => {
+          if (pip.dataset.uid === user.id) {
+            pip.classList.add('lit');
+            pip.classList.remove('steady');
+          }
+        });
       }
       await supabase.from('sessions').update({ lobby_state: ls }).eq('id', activeSession.id);
     });
@@ -1390,6 +1453,7 @@ function renderSessionSummary(container) {
 /** Cleanup when leaving session view */
 export function cleanupSession() {
   clearInterval(timerInterval);
+  clearInterval(heartbeatInterval);
   if (realtimeChannel) supabase.removeChannel(realtimeChannel);
   // Remove delegated click handler
   if (lobbyContainer && lobbyContainer._lobbyClickHandler) {

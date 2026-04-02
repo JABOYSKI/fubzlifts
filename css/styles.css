@@ -48,7 +48,7 @@ body.resuming .splash-screen { animation: none !important; }
 }
 @keyframes splashFadeOut { from { opacity: 1; } to { opacity: 0; } }
 
-.container { max-width: 580px; margin: 0 auto; padding: 18px 16px; }
+.container { max-width: 580px; margin: 0 auto; padding: 10px 16px; }
 
 /* ===== Header ===== */
 header {
@@ -167,14 +167,14 @@ h3 { margin: 0 0 8px; font-size: 11px; font-weight: 600; color: var(--muted-colo
 .badge-success { background: var(--success-dim); color: #7fffaa; border-color: rgba(26,122,58,.35); }
 
 /* ===== Sections ===== */
-.section { margin: 20px 0; }
+.section { margin: 10px 0; }
 .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 
 /* ===== Timer Stack ===== */
-.timer-stack { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
+.timer-stack { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
 .timer-row {
-  display: flex; align-items: center; gap: 10px;
-  padding: 8px 12px; border-radius: var(--radius);
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 10px; border-radius: var(--radius);
   background: var(--panel); border: 1px solid var(--border-light);
   transition: border-color .2s, background .2s;
 }
@@ -207,21 +207,21 @@ h3 { margin: 0 0 8px; font-size: 11px; font-weight: 600; color: var(--muted-colo
 
 /* ===== Exercise Display ===== */
 .exercise-banner {
-  text-align: center; padding: 16px; margin-bottom: 16px;
+  text-align: center; padding: 10px 16px; margin-bottom: 8px;
   background: var(--panel); border: 1px solid var(--border-light);
   border-radius: var(--radius);
 }
-.exercise-name { font-size: 20px; font-weight: 800; color: var(--orange); text-transform: uppercase; letter-spacing: 1px; }
-.exercise-meta { font-size: 12px; color: var(--muted-color); margin-top: 4px; }
+.exercise-name { font-size: 18px; font-weight: 800; color: var(--orange); text-transform: uppercase; letter-spacing: 1px; }
+.exercise-meta { font-size: 11px; color: var(--muted-color); margin-top: 2px; }
 
 .weight-display {
-  font-size: 36px; font-weight: 800; color: var(--text); text-align: center;
-  margin: 8px 0;
+  font-size: 32px; font-weight: 800; color: var(--text); text-align: center;
+  margin: 4px 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 .weight-unit { font-size: 16px; color: var(--muted-color); font-weight: 600; }
 
-.set-dots { display: flex; justify-content: center; gap: 8px; margin: 12px 0; }
+.set-dots { display: flex; justify-content: center; gap: 8px; margin: 6px 0; }
 .set-dot {
   width: 28px; height: 28px; border-radius: 50%;
   border: 2px solid var(--border); background: var(--panel);
@@ -255,8 +255,8 @@ h3 { margin: 0 0 8px; font-size: 11px; font-weight: 600; color: var(--muted-colo
 
 /* ===== Turn Indicator ===== */
 .turn-indicator {
-  text-align: center; padding: 10px;
-  font-size: 15px; font-weight: 700;
+  text-align: center; padding: 4px;
+  font-size: 14px; font-weight: 700;
 }
 .turn-indicator .name { color: var(--orange); }
 .turn-indicator.your-turn { color: var(--orange); }
@@ -559,6 +559,10 @@ input[type="checkbox"]:active { transform: scale(0.75); }
 /* ===== Responsive ===== */
 @media (max-width: 400px) {
   .logo { font-size: 18px; }
-  .weight-display { font-size: 28px; }
-  .btn-large { padding: 12px 20px; font-size: 15px; }
+  .weight-display { font-size: 26px; }
+  .btn-large { padding: 10px 18px; font-size: 14px; }
+  .container { padding: 6px 12px; }
+  .exercise-banner { padding: 8px 12px; margin-bottom: 6px; }
+  .timer-row { padding: 4px 8px; }
+  .section { margin: 6px 0; }
 }

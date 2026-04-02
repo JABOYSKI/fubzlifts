@@ -1121,15 +1121,16 @@ function renderSession(container) {
       <div class="claw-drawer" id="clawDrawer">
         <button class="claw-btn ${iVotedExtra ? 'voted' : ''}" id="clawVoteBtn" ${iVotedExtra || extraSetActive ? 'disabled' : ''}>
           <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="claw-svg">
-            <!-- Toe pads with claws -->
-            <ellipse cx="22" cy="32" rx="10" ry="13" fill="#C0392B"/>
-            <path d="M16 20C13 12 15 4 20 1C18 9 19 16 22 22" fill="#2C2C2C"/>
-            <ellipse cx="42" cy="22" rx="9" ry="12" fill="#C0392B"/>
-            <path d="M37 10C35 2 38 -5 43 -7C40 1 40 6 43 12" fill="#2C2C2C"/>
-            <ellipse cx="58" cy="22" rx="9" ry="12" fill="#C0392B"/>
-            <path d="M54 10C52 2 55 -5 60 -7C57 1 57 6 60 12" fill="#2C2C2C"/>
-            <ellipse cx="78" cy="32" rx="10" ry="13" fill="#C0392B"/>
-            <path d="M74 20C71 12 73 4 78 1C76 9 77 16 80 22" fill="#2C2C2C"/>
+            <!-- Claws — thick, prominent, visible at small sizes -->
+            <path d="M18 24L12 4L24 20Z" fill="#222"/>
+            <path d="M38 14L34 -6L46 12Z" fill="#222"/>
+            <path d="M62 14L58 -6L70 12Z" fill="#222"/>
+            <path d="M82 24L78 4L90 20Z" fill="#222"/>
+            <!-- Toe pads -->
+            <ellipse cx="22" cy="32" rx="11" ry="14" fill="#C0392B"/>
+            <ellipse cx="42" cy="22" rx="10" ry="13" fill="#C0392B"/>
+            <ellipse cx="58" cy="22" rx="10" ry="13" fill="#C0392B"/>
+            <ellipse cx="78" cy="32" rx="11" ry="14" fill="#C0392B"/>
             <!-- Main pad -->
             <path d="M50 95C28 95 14 82 14 68C14 54 30 46 50 46C70 46 86 54 86 68C86 82 72 95 50 95Z" fill="#C0392B"/>
           </svg>
@@ -1163,7 +1164,7 @@ function renderSession(container) {
     </div>
 
     ${(isMyTurn && !mySetsDone) ? `
-      <div style="margin:16px 0;display:flex;flex-direction:column;gap:8px;align-items:center">
+      <div style="margin:8px 0;display:flex;flex-direction:column;gap:6px;align-items:center">
         <button class="btn btn-primary btn-large" id="doneBtn">
           DONE — Set ${currentSetNum}/${maxSets}
         </button>
@@ -1172,13 +1173,13 @@ function renderSession(container) {
         </button>
       </div>
     ` : `
-      <div style="margin:16px 0;text-align:center">
+      <div style="margin:8px 0;min-height:72px;display:flex;align-items:center;justify-content:center">
         <div class="muted">${mySetsDone ? 'All sets done — waiting for others' : 'Wait for your turn...'}</div>
       </div>
     `}
 
     <div class="section">
-      <h3>Rest Timers</h3>
+      <h3 style="margin-bottom:4px;font-size:13px">Rest Timers</h3>
       <div class="timer-stack">
         ${activeSession.turn_order.map(uid => {
           const member = sessionMembers.find(m => m.id === uid);
@@ -1200,17 +1201,17 @@ function renderSession(container) {
     </div>
 
     <div class="section">
-      <h3>Progress — ${exerciseName}</h3>
+      <h3 style="margin-bottom:4px;font-size:13px">Progress — ${exerciseName}</h3>
       ${activeSession.turn_order.map(uid => {
         const member = sessionMembers.find(m => m.id === uid);
         const alias = member?.alias || 'Unknown';
         const userLogs = setLogs.filter(l => l.user_id === uid && l.exercise === exercise);
         const mw = memberWeights[uid]?.[exercise] || 45;
         return `
-          <div class="card" style="margin-bottom:6px">
+          <div class="card" style="margin-bottom:4px;padding:6px 10px">
             <div class="card-row">
               <div class="card-info">
-                <div class="card-title">${esc(alias)} <span class="muted">${mw} lbs</span></div>
+                <div class="card-title" style="font-size:13px">${esc(alias)} <span class="muted">${mw} lbs</span></div>
               </div>
               <div class="set-dots" style="margin:0">
                 ${Array.from({ length: maxSets }, (_, i) => {

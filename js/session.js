@@ -18,6 +18,7 @@ let onSessionEnd = null;
 
 let groupOwnerId = null; // the group's actual owner
 let lastExercise = null; // track exercise for splash detection
+let extraSetSplashShown = {}; // track which exercises already showed the +1 splash
 // visibilityHandler removed — app.js invisible reload handles tab resume
 let lobbyContainer = null; // ref for visibility reconnect
 
@@ -32,12 +33,18 @@ function getSessionAdmin() {
   return order[0] || null;
 }
 
-/** Get max sets for an exercise, respecting lobby DL override */
+/** Get max sets for an exercise, respecting lobby DL override and extra set vote */
 function getMaxSets(exercise) {
+  let sets = DEFAULT_SETS[exercise];
   if (exercise === 'deadlift' && activeSession?.lobby_state?.dl_sets) {
-    return activeSession.lobby_state.dl_sets;
+    sets = activeSession.lobby_state.dl_sets;
   }
-  return DEFAULT_SETS[exercise];
+  // Unanimous +1 set vote
+  const extraVotes = activeSession?.lobby_state?.extra_set_votes?.[exercise];
+  if (extraVotes && activeSession?.turn_order?.every(uid => extraVotes[uid])) {
+    sets += 1;
+  }
+  return sets;
 }
 
 /** Check if an exercise uses simultaneous mode (all lift at once) */
@@ -244,6 +251,13 @@ function setupRealtimeChannel(container) {
           showExerciseSplash(completedExercise, () => renderSession(container));
         } else {
           lastExercise = newExercise;
+          // Check if extra set vote just became unanimous
+          const exVotes = activeSession.lobby_state?.extra_set_votes?.[newExercise];
+          if (exVotes && !extraSetSplashShown[newExercise] && activeSession.turn_order.every(uid => exVotes[uid])) {
+            extraSetSplashShown[newExercise] = true;
+            showExtraSetSplash(() => renderSession(container));
+            return;
+          }
           renderSession(container);
         }
       } else if (activeSession.status === 'lobby') {
@@ -963,6 +977,59 @@ function showExerciseSplash(exercise, onDone) {
   const autoTimer = setTimeout(dismiss, 10000);
 }
 
+/** Show extra set splash — cat says TOMCATZ MEOW */
+function showExtraSetSplash(onDone) {
+  const message = 'TOMCATZ MEOW 1 2 3 MEOW!!!';
+  const splash = document.createElement('div');
+  splash.className = 'splash-overlay';
+  splash.innerHTML = `
+    <style>
+      @keyframes catBounce2 {
+        0%, 100% { transform: translateY(0) rotate(0); }
+        20% { transform: translateY(-10px) rotate(-5deg); }
+        40% { transform: translateY(-4px) rotate(3deg); }
+        60% { transform: translateY(-12px) rotate(-3deg); }
+        80% { transform: translateY(-6px) rotate(5deg); }
+      }
+    </style>
+    <div class="splash-content">
+      <h2 style="color:var(--danger)">+1 SET!</h2>
+      <div style="display:flex;align-items:flex-start;justify-content:center;gap:14px;margin:24px 0">
+        <img src="icons/icon-192.png" alt="" style="width:72px;height:72px;border-radius:50%;flex-shrink:0;animation:catBounce2 0.8s ease-in-out infinite" />
+        <div style="background:var(--card-bg);border:2px solid var(--danger);border-radius:14px 14px 14px 2px;padding:12px 16px;font-family:monospace;font-size:17px;color:var(--danger);min-height:1.4em;letter-spacing:1px">
+          <span id="extraSplashText"></span><span style="display:inline-block;width:2px;height:1em;background:var(--danger);margin-left:2px;animation:blink 0.5s step-end infinite;vertical-align:text-bottom"></span>
+        </div>
+      </div>
+      <p class="muted" style="font-size:12px;margin-top:14px">Tap anywhere to continue</p>
+    </div>
+  `;
+  document.body.appendChild(splash);
+
+  const textEl = splash.querySelector('#extraSplashText');
+  let charIdx = 0;
+  const typeInterval = setInterval(() => {
+    if (charIdx < message.length) {
+      textEl.textContent += message[charIdx];
+      charIdx++;
+    } else {
+      clearInterval(typeInterval);
+    }
+  }, 65);
+
+  let dismissed = false;
+  const dismiss = () => {
+    if (dismissed) return;
+    dismissed = true;
+    clearInterval(typeInterval);
+    clearTimeout(autoTimer);
+    splash.remove();
+    onDone();
+  };
+
+  splash.addEventListener('click', dismiss);
+  const autoTimer = setTimeout(dismiss, 10000);
+}
+
 /** End the session */
 async function endSession() {
   await supabase.from('sessions').update({
@@ -1034,6 +1101,12 @@ function renderSession(container) {
   const activeLogs = setLogs.filter(l => l.user_id === activeTurnUserId && l.exercise === exercise);
   const currentSetNum = activeLogs.length + 1;
   const mySetsDone = simultaneous && activeLogs.length >= maxSets;
+
+  // Extra set vote state
+  const extraVotes = activeSession.lobby_state?.extra_set_votes?.[exercise] || {};
+  const iVotedExtra = !!extraVotes[user.id];
+  const extraVoteCount = activeSession.turn_order.filter(uid => extraVotes[uid]).length;
+  const extraSetActive = activeSession.turn_order.every(uid => extraVotes[uid]);
 
   container.innerHTML = `
     <div class="exercise-banner">
@@ -1135,10 +1208,43 @@ function renderSession(container) {
     container.querySelector('#doneBtn')?.addEventListener('click', () => logSet(true));
     container.querySelector('#failBtn')?.addEventListener('click', () => logSet(false));
   }
+
+  // Paw print FAB for extra set vote (only if not already unanimous)
+  const oldPaw = document.querySelector('.paw-btn');
+  if (oldPaw) oldPaw.remove();
+
+  if (!extraSetActive) {
+    const pawBtn = document.createElement('button');
+    pawBtn.className = `paw-btn ${iVotedExtra ? 'voted' : ''}`;
+    pawBtn.id = 'extraSetBtn';
+    if (iVotedExtra) pawBtn.disabled = true;
+    pawBtn.innerHTML = `
+      <span class="paw-icon">🐾</span>
+      <span class="paw-count">${extraVoteCount}/${activeSession.turn_order.length}</span>
+    `;
+    document.body.appendChild(pawBtn);
+
+    if (!iVotedExtra) {
+      pawBtn.addEventListener('click', async () => {
+        const votes = { ...(activeSession.lobby_state?.extra_set_votes || {}) };
+        votes[exercise] = { ...(votes[exercise] || {}), [user.id]: true };
+        const ls = { ...activeSession.lobby_state, extra_set_votes: votes };
+        activeSession.lobby_state = ls;
+        pawBtn.classList.add('voted');
+        pawBtn.disabled = true;
+        pawBtn.querySelector('.paw-count').textContent = `${extraVoteCount + 1}/${activeSession.turn_order.length}`;
+        await supabase.from('sessions').update({ lobby_state: ls }).eq('id', activeSession.id);
+      });
+    }
+  }
 }
 
 /** Render session summary after completion */
 function renderSessionSummary(container) {
+  // Remove paw button
+  const paw = document.querySelector('.paw-btn');
+  if (paw) paw.remove();
+
   const exercises = WORKOUTS[activeSession.workout_type];
   const nextWorkout = activeSession.workout_type === 'A' ? 'B' : 'A';
 
@@ -1243,8 +1349,12 @@ export function cleanupSession() {
   hostUsurped = false;
   pendingUsurpType = null;
   lastExercise = null;
+  extraSetSplashShown = {};
   setLogs = [];
   timers = {};
+  // Remove paw button if present
+  const paw = document.querySelector('.paw-btn');
+  if (paw) paw.remove();
 }
 
 function esc(str) {

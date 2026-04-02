@@ -1,5 +1,5 @@
 ﻿// FubzLifts Service Worker â€” cache-first with auto-update notification
-const CACHE = 'fubzlifts-2026-04-02T00:15:27ZBUILD_TIMESTAMP';
+const CACHE = 'fubzlifts-2026-04-02T00:27:05Z2026-04-02T00:15:27ZBUILD_TIMESTAMP';
 const STATIC_ASSETS = [
   './',
   './index.html',

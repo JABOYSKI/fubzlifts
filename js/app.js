@@ -1,7 +1,7 @@
 // Main app module — routing and state
 import { initAuth, onAuthChange, renderAuth, signOut, getUser } from './auth.js';
 import { renderGroups } from './group.js';
-import { startSession, cleanupSession } from './session.js';
+import { startSession, cleanupSession, saveTimerState } from './session.js';
 import { supabase } from './supabase.js';
 import { showView, toast, EXERCISE_NAMES } from './utils.js';
 import { BUILD_TIME } from './version.js';
@@ -21,6 +21,7 @@ function saveResumeState() {
       page: currentPage || 'groups',
       groupId: activeGroupId,
     }));
+    saveTimerState(); // persist timer values so they survive the reload
   }
 }
 

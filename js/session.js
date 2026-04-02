@@ -45,6 +45,16 @@ function isSimultaneous(exercise) {
   return !!activeSession?.lobby_state?.simultaneous?.[exercise];
 }
 
+/** Save timer state to sessionStorage so it survives tab-resume reloads */
+export function saveTimerState() {
+  if (Object.keys(timers).length > 0) {
+    sessionStorage.setItem('fubz_timers', JSON.stringify({
+      timers: { ...timers },
+      savedAt: Date.now(),
+    }));
+  }
+}
+
 /** Start or join a session/lobby for a group */
 export async function startSession(groupId, container, onEnd) {
 
@@ -165,17 +175,38 @@ async function loadSessionState(container) {
     .order('logged_at', { ascending: true });
   setLogs = logs || [];
 
-  // Reconstruct timers from set_logs timestamps so they survive tab resume reloads
+  // Restore timers: prefer saved state + elapsed time, fallback to set_logs
+  const savedTimerData = JSON.parse(sessionStorage.getItem('fubz_timers') || 'null');
+  sessionStorage.removeItem('fubz_timers');
+
   timers = {};
   const now = Date.now();
   const simultaneous = isSimultaneous(activeSession.current_exercise);
   const activeTurnUserId = activeSession.turn_order[activeSession.current_turn_index];
+
   activeSession.turn_order.forEach(uid => {
-    // Active person in turn mode has timer at 0 (they're lifting)
+    // Active person in turn mode — timer stays at 0 (they're lifting)
     if (!simultaneous && uid === activeTurnUserId) {
       timers[uid] = 0;
+      return;
+    }
+
+    if (savedTimerData?.savedAt) {
+      // Check if this user did a set AFTER we went hidden (overrides saved value)
+      const recentLog = setLogs
+        .filter(l => l.user_id === uid && new Date(l.logged_at).getTime() > savedTimerData.savedAt)
+        .pop();
+
+      if (recentLog) {
+        // They did a set while we were hidden — timer = time since that set
+        timers[uid] = Math.max(0, Math.floor((now - new Date(recentLog.logged_at).getTime()) / 1000));
+      } else {
+        // They were resting the whole time — saved value + hidden duration
+        const elapsed = Math.floor((now - savedTimerData.savedAt) / 1000);
+        timers[uid] = (savedTimerData.timers?.[uid] || 0) + elapsed;
+      }
     } else {
-      // Reconstruct rest time from most recent set log
+      // No saved data (fresh page load) — reconstruct from set_logs
       const userLogs = setLogs.filter(l => l.user_id === uid);
       if (userLogs.length > 0) {
         const lastLog = userLogs[userLogs.length - 1];

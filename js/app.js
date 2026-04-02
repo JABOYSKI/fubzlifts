@@ -4,6 +4,7 @@ import { renderGroups } from './group.js';
 import { startSession, cleanupSession } from './session.js';
 import { supabase } from './supabase.js';
 import { showView, toast, EXERCISE_NAMES } from './utils.js';
+import { BUILD_TIME } from './version.js';
 
 let currentGroupRef = null;
 let currentPage = null;
@@ -58,12 +59,34 @@ window.addEventListener('focus', () => {
 // ─── Init ────────────────────────────────────────────────
 
 async function init() {
+  // Auto-update: compare loaded BUILD_TIME with server version
+  try {
+    const res = await fetch('js/version.js?_=' + Date.now());
+    if (res.ok) {
+      const text = await res.text();
+      const match = text.match(/BUILD_TIME\s*=\s*'([^']+)'/);
+      if (match && match[1] !== BUILD_TIME) {
+        // New version on server — clear caches and reload
+        try {
+          await Promise.all((await caches.keys()).map(n => caches.delete(n)));
+          await Promise.all((await navigator.serviceWorker.getRegistrations()).map(r => r.unregister()));
+        } catch (e) {}
+        window.location.reload();
+        return;
+      }
+    }
+  } catch (e) {
+    // Offline — continue with cached version
+  }
+
   const user = await initAuth();
 
   onAuthChange((user, event) => {
     if (event === 'SIGNED_IN') {
-      if (user) renderApp();
+      if (user && !currentPage) renderApp(); // prevent double-render on existing session
     } else if (event === 'SIGNED_OUT') {
+      currentPage = null;
+      activeGroupId = null;
       showAuthScreen();
     }
   });
@@ -108,21 +131,36 @@ function renderApp() {
   const user = getUser();
   if (!user) return;
 
-  dismissAuthScreen();
-  document.getElementById('headerAlias').textContent = user.alias;
-  showNav();
-
   // Check for saved resume state (from invisible reload)
   const resume = JSON.parse(sessionStorage.getItem('fubz_resume') || 'null');
   sessionStorage.removeItem('fubz_resume');
 
+  // On resume: suppress all animations for instant display
+  if (resume) {
+    document.body.classList.add('resuming');
+    document.body.style.transition = 'none';
+  }
+
+  dismissAuthScreen();
+  document.getElementById('headerAlias').textContent = user.alias;
+  showNav();
+
   if (resume?.page === 'session' && resume.groupId) {
-    // Restore into session/lobby for the same group
     navigateToSession(resume.groupId);
   } else if (resume?.page === 'profile') {
     navigateTo('profile');
   } else {
     navigateTo('groups');
+  }
+
+  // Re-enable animations after content is painted
+  if (resume) {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        document.body.classList.remove('resuming');
+        document.body.style.transition = '';
+      });
+    });
   }
 }
 

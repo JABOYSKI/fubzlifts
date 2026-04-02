@@ -165,8 +165,26 @@ async function loadSessionState(container) {
     .order('logged_at', { ascending: true });
   setLogs = logs || [];
 
+  // Reconstruct timers from set_logs timestamps so they survive tab resume reloads
   timers = {};
-  activeSession.turn_order.forEach(uid => { timers[uid] = 0; });
+  const now = Date.now();
+  const simultaneous = isSimultaneous(activeSession.current_exercise);
+  const activeTurnUserId = activeSession.turn_order[activeSession.current_turn_index];
+  activeSession.turn_order.forEach(uid => {
+    // Active person in turn mode has timer at 0 (they're lifting)
+    if (!simultaneous && uid === activeTurnUserId) {
+      timers[uid] = 0;
+    } else {
+      // Reconstruct rest time from most recent set log
+      const userLogs = setLogs.filter(l => l.user_id === uid);
+      if (userLogs.length > 0) {
+        const lastLog = userLogs[userLogs.length - 1];
+        timers[uid] = Math.max(0, Math.floor((now - new Date(lastLog.logged_at).getTime()) / 1000));
+      } else {
+        timers[uid] = 0;
+      }
+    }
+  });
   lastExercise = activeSession.current_exercise;
   startTimerTick(container);
   renderSession(container);

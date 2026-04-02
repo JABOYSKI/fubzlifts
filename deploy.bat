@@ -8,6 +8,9 @@ for /f "tokens=*" %%i in ('powershell -command "[DateTime]::UtcNow.ToString('yyy
 echo // Auto-updated on deploy — do not edit manually> js\version.js
 echo export const BUILD_TIME = '%TIMESTAMP%';>> js\version.js
 
+:: Stamp SW cache name so browser detects new worker on deploy
+powershell -command "(Get-Content 'sw.js') -replace \"fubzlifts-[^']*\", 'fubzlifts-%TIMESTAMP%' | Set-Content 'sw.js' -Encoding UTF8"
+
 :: Stage, commit, push
 git add -A
 git commit -m "deploy: %TIMESTAMP%"

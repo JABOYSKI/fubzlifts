@@ -1,5 +1,5 @@
-// FubzLifts Service Worker — cache-first with auto-update notification
-const CACHE = 'fubzlifts-BUILD_TIMESTAMP';
+﻿// FubzLifts Service Worker â€” cache-first with auto-update notification
+const CACHE = 'fubzlifts-2026-04-02T00:15:27ZBUILD_TIMESTAMP';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -41,7 +41,7 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
-  // Let Supabase API calls bypass the SW entirely — browser handles them directly
+  // Let Supabase API calls bypass the SW entirely â€” browser handles them directly
   // This prevents the SW from interfering with POST/PATCH/DELETE after tab resume
   if (url.hostname.includes('supabase')) {
     return;

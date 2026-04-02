@@ -36,6 +36,12 @@ body {
   opacity: 0;
   transition: opacity 0.35s ease;
 }
+/* Suppress all animations during invisible tab-resume reload */
+body.resuming { opacity: 1 !important; transition: none !important; }
+body.resuming .view.active { animation: none !important; }
+body.resuming .card { animation: none !important; }
+body.resuming .splash-screen { animation: none !important; }
+
 .splash-screen.hidden {
   animation: splashFadeOut .25s cubic-bezier(0.4,0,1,1) both;
   pointer-events: none;

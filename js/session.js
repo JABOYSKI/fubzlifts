@@ -19,6 +19,7 @@ let onSessionEnd = null;
 let groupOwnerId = null; // the group's actual owner
 let lastExercise = null; // track exercise for splash detection
 let extraSetSplashShown = {}; // track which exercises already showed the +1 splash
+let lastSetUserId = null; // track who just completed a set (for gleam animation)
 // visibilityHandler removed — app.js invisible reload handles tab resume
 let lobbyContainer = null; // ref for visibility reconnect
 
@@ -277,6 +278,7 @@ function setupRealtimeChannel(container) {
         if (!setLogs.find(l => l.id === payload.new.id)) {
           setLogs.push(payload.new);
         }
+        lastSetUserId = payload.new.user_id;
         refreshTimers();
         renderSession(container);
       }
@@ -712,26 +714,41 @@ function setupLobbyDelegation(container) {
 /** Update this user's lobby state (vote/ready) — optimistic local update */
 async function updateMyLobbyState(updates) {
   const user = getUser();
-  const lobbyState = { ...activeSession.lobby_state };
+
+  // Optimistic: update local state immediately
+  const localLobby = { ...activeSession.lobby_state };
+  if (!localLobby.members) localLobby.members = {};
+  if (!localLobby.members[user.id]) localLobby.members[user.id] = {};
+  Object.assign(localLobby.members[user.id], updates);
+  activeSession.lobby_state = localLobby;
+  if (lobbyContainer) renderLobby(lobbyContainer);
+
+  // Read fresh lobby_state from DB to avoid overwriting host's dl_sets/simultaneous/etc
+  const { data: fresh } = await supabase
+    .from('sessions')
+    .select('lobby_state, workout_type')
+    .eq('id', activeSession.id)
+    .single();
+
+  const lobbyState = { ...(fresh?.lobby_state || localLobby) };
   if (!lobbyState.members) lobbyState.members = {};
   if (!lobbyState.members[user.id]) lobbyState.members[user.id] = {};
   Object.assign(lobbyState.members[user.id], updates);
 
-  // Optimistic: update local state and patch UI immediately
-  activeSession.lobby_state = lobbyState;
-  if (lobbyContainer) renderLobby(lobbyContainer);
+  const dbUpdate = { lobby_state: lobbyState };
 
   // If host hasn't usurped, auto-follow the winning vote
-  const dbUpdate = { lobby_state: lobbyState };
   if (!hostUsurped && getSessionAdmin() === user.id && updates.workout_vote) {
     const allMembers = activeSession.turn_order.map(uid => lobbyState.members?.[uid] || {});
     const winningVote = getWinningVote(allMembers);
-    if (activeSession.workout_type !== winningVote) {
+    const currentType = fresh?.workout_type || activeSession.workout_type;
+    if (currentType !== winningVote) {
       dbUpdate.workout_type = winningVote;
       activeSession.workout_type = winningVote;
     }
   }
 
+  activeSession.lobby_state = lobbyState;
   await supabase.from('sessions').update(dbUpdate).eq('id', activeSession.id);
 }
 
@@ -856,6 +873,7 @@ async function logSet(success) {
   if (error) { toast('Failed to log set — check connection'); return; }
 
   if (!setLogs.find(l => l.id === log.id)) setLogs.push(log);
+  lastSetUserId = user.id;
 
   await advanceTurn();
 }
@@ -1122,10 +1140,10 @@ function renderSession(container) {
         <button class="claw-btn ${iVotedExtra ? 'voted' : ''}" id="clawVoteBtn" ${iVotedExtra || extraSetActive ? 'disabled' : ''}>
           <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="claw-svg">
             <!-- Claws — thick, prominent, visible at small sizes -->
-            <path d="M18 24L12 4L24 20Z" fill="#222"/>
-            <path d="M38 14L34 -6L46 12Z" fill="#222"/>
-            <path d="M62 14L58 -6L70 12Z" fill="#222"/>
-            <path d="M82 24L78 4L90 20Z" fill="#222"/>
+            <path d="M18 24L12 4L24 20Z" fill="#8B1A1A"/>
+            <path d="M38 14L34 -6L46 12Z" fill="#8B1A1A"/>
+            <path d="M62 14L58 -6L70 12Z" fill="#8B1A1A"/>
+            <path d="M82 24L78 4L90 20Z" fill="#8B1A1A"/>
             <!-- Toe pads -->
             <ellipse cx="22" cy="32" rx="11" ry="14" fill="#C0392B"/>
             <ellipse cx="42" cy="22" rx="10" ry="13" fill="#C0392B"/>
@@ -1155,9 +1173,9 @@ function renderSession(container) {
       ${Array.from({ length: maxSets }, (_, i) => {
         const log = activeLogs[i];
         let cls = '';
-        const isNewest = i === activeLogs.length - 1;
-        if (log && log.success) cls = 'done' + (isNewest ? ' gleam' : '');
-        else if (log && !log.success) cls = 'fail' + (isNewest ? ' gleam' : '');
+        const shouldGleam = i === activeLogs.length - 1 && lastSetUserId === activeTurnUserId;
+        if (log && log.success) cls = 'done' + (shouldGleam ? ' gleam' : '');
+        else if (log && !log.success) cls = 'fail' + (shouldGleam ? ' gleam' : '');
         else if (i === activeLogs.length) cls = 'current';
         return `<div class="set-dot ${cls}">${i + 1}</div>`;
       }).join('')}
@@ -1217,9 +1235,9 @@ function renderSession(container) {
                 ${Array.from({ length: maxSets }, (_, i) => {
                   const log = userLogs[i];
                   let cls = '';
-                  const isNewest = i === userLogs.length - 1;
-                  if (log && log.success) cls = 'done' + (isNewest ? ' gleam' : '');
-                  else if (log && !log.success) cls = 'fail' + (isNewest ? ' gleam' : '');
+                  const shouldGleam = i === userLogs.length - 1 && lastSetUserId === uid;
+                  if (log && log.success) cls = 'done' + (shouldGleam ? ' gleam' : '');
+                  else if (log && !log.success) cls = 'fail' + (shouldGleam ? ' gleam' : '');
                   return `<div class="set-dot ${cls}" style="width:20px;height:20px;font-size:9px">${i + 1}</div>`;
                 }).join('')}
               </div>
@@ -1318,6 +1336,10 @@ function renderSessionSummary(container) {
       <p class="muted">Next session: Workout ${nextWorkout}</p>
     </div>
 
+    <button class="btn btn-primary btn-large" id="backToGroupsBtn" style="margin:12px auto;display:block;width:100%">
+      Back to Groups
+    </button>
+
     ${exercises.map(exercise => `
       <div class="summary-card">
         <h3>${EXERCISE_NAMES[exercise]}</h3>
@@ -1341,10 +1363,6 @@ function renderSessionSummary(container) {
         }).join('')}
       </div>
     `).join('')}
-
-    <button class="btn btn-primary btn-large" id="backToGroupsBtn" style="margin-top:20px">
-      Back to Groups
-    </button>
   `;
 
   // Typewriter effect for summary
@@ -1384,6 +1402,7 @@ export function cleanupSession() {
   pendingUsurpType = null;
   lastExercise = null;
   extraSetSplashShown = {};
+  lastSetUserId = null;
   setLogs = [];
   timers = {};
 }

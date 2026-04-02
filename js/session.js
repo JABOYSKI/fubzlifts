@@ -45,14 +45,37 @@ function isSimultaneous(exercise) {
   return !!activeSession?.lobby_state?.simultaneous?.[exercise];
 }
 
-/** Save timer state to sessionStorage so it survives tab-resume reloads */
-export function saveTimerState() {
-  if (Object.keys(timers).length > 0) {
-    sessionStorage.setItem('fubz_timers', JSON.stringify({
-      timers: { ...timers },
-      savedAt: Date.now(),
-    }));
+/** Compute rest timer for a user from DB timestamps (source of truth) */
+function computeTimer(uid) {
+  if (!activeSession) return 0;
+  const simultaneous = isSimultaneous(activeSession.current_exercise);
+  const activeTurnUserId = activeSession.turn_order[activeSession.current_turn_index];
+
+  // Active person in turn mode — they're lifting, timer is 0
+  if (!simultaneous && uid === activeTurnUserId) return 0;
+
+  // Time since their last set for the current exercise
+  const userLogs = setLogs.filter(l => l.user_id === uid && l.exercise === activeSession.current_exercise);
+  if (userLogs.length > 0) {
+    const lastLog = userLogs[userLogs.length - 1];
+    return Math.max(0, Math.floor((Date.now() - new Date(lastLog.logged_at).getTime()) / 1000));
   }
+
+  // No sets yet for this exercise — time since exercise started
+  const exStarted = activeSession.lobby_state?.exercise_started_at;
+  if (exStarted) {
+    return Math.max(0, Math.floor((Date.now() - new Date(exStarted).getTime()) / 1000));
+  }
+
+  return 0;
+}
+
+/** Refresh all timer values from DB timestamps */
+function refreshTimers() {
+  if (!activeSession) return;
+  activeSession.turn_order.forEach(uid => {
+    timers[uid] = computeTimer(uid);
+  });
 }
 
 /** Start or join a session/lobby for a group */
@@ -175,47 +198,9 @@ async function loadSessionState(container) {
     .order('logged_at', { ascending: true });
   setLogs = logs || [];
 
-  // Restore timers: prefer saved state + elapsed time, fallback to set_logs
-  const savedTimerData = JSON.parse(sessionStorage.getItem('fubz_timers') || 'null');
-  sessionStorage.removeItem('fubz_timers');
-
+  // Timers are computed from DB timestamps (source of truth) — no client state needed
   timers = {};
-  const now = Date.now();
-  const simultaneous = isSimultaneous(activeSession.current_exercise);
-  const activeTurnUserId = activeSession.turn_order[activeSession.current_turn_index];
-
-  activeSession.turn_order.forEach(uid => {
-    // Active person in turn mode — timer stays at 0 (they're lifting)
-    if (!simultaneous && uid === activeTurnUserId) {
-      timers[uid] = 0;
-      return;
-    }
-
-    if (savedTimerData?.savedAt) {
-      // Check if this user did a set AFTER we went hidden (overrides saved value)
-      const recentLog = setLogs
-        .filter(l => l.user_id === uid && new Date(l.logged_at).getTime() > savedTimerData.savedAt)
-        .pop();
-
-      if (recentLog) {
-        // They did a set while we were hidden — timer = time since that set
-        timers[uid] = Math.max(0, Math.floor((now - new Date(recentLog.logged_at).getTime()) / 1000));
-      } else {
-        // They were resting the whole time — saved value + hidden duration
-        const elapsed = Math.floor((now - savedTimerData.savedAt) / 1000);
-        timers[uid] = (savedTimerData.timers?.[uid] || 0) + elapsed;
-      }
-    } else {
-      // No saved data (fresh page load) — reconstruct from set_logs
-      const userLogs = setLogs.filter(l => l.user_id === uid);
-      if (userLogs.length > 0) {
-        const lastLog = userLogs[userLogs.length - 1];
-        timers[uid] = Math.max(0, Math.floor((now - new Date(lastLog.logged_at).getTime()) / 1000));
-      } else {
-        timers[uid] = 0;
-      }
-    }
-  });
+  refreshTimers();
   lastExercise = activeSession.current_exercise;
   startTimerTick(container);
   renderSession(container);
@@ -278,7 +263,7 @@ function setupRealtimeChannel(container) {
         if (!setLogs.find(l => l.id === payload.new.id)) {
           setLogs.push(payload.new);
         }
-        timers[payload.new.user_id] = 0;
+        refreshTimers();
         renderSession(container);
       }
     })
@@ -290,9 +275,6 @@ function setupRealtimeChannel(container) {
     }, async payload => {
       const members = await getGroupMembers(activeSession.group_id);
       sessionMembers = members;
-      if (payload.new && !timers[payload.new.user_id]) {
-        timers[payload.new.user_id] = 0;
-      }
       if (activeSession.status === 'lobby') {
         renderLobby(container);
       } else {
@@ -745,10 +727,14 @@ async function adminStartSession(container) {
   try {
     const exercises = WORKOUTS[activeSession.workout_type];
 
+    const lobbyWithTimestamp = {
+      ...activeSession.lobby_state,
+      exercise_started_at: new Date().toISOString(),
+    };
     const { error } = await supabase.from('sessions').update({
       status: 'active',
       workout_type: activeSession.workout_type,
-      lobby_state: activeSession.lobby_state,
+      lobby_state: lobbyWithTimestamp,
       current_exercise: exercises[0],
       current_turn_index: 0,
       current_set: 1,
@@ -803,13 +789,7 @@ function startTimerTick(container) {
   clearInterval(timerInterval);
   timerInterval = setInterval(() => {
     if (!activeSession || activeSession.status !== 'active') return;
-    const simultaneous = isSimultaneous(activeSession.current_exercise);
-    const activeTurnUserId = activeSession.turn_order[activeSession.current_turn_index];
-    activeSession.turn_order.forEach(uid => {
-      if (simultaneous || uid !== activeTurnUserId) {
-        timers[uid] = (timers[uid] || 0) + 1;
-      }
-    });
+    refreshTimers();
     updateTimerDisplay();
   }, 1000);
 }
@@ -862,7 +842,6 @@ async function logSet(success) {
   if (error) { toast('Failed to log set — check connection'); return; }
 
   if (!setLogs.find(l => l.id === log.id)) setLogs.push(log);
-  timers[user.id] = 0;
 
   await advanceTurn();
 }
@@ -884,12 +863,13 @@ async function advanceTurn() {
     if (currentIdx < exercises.length - 1) {
       const nextExercise = exercises[currentIdx + 1];
       // Update DB immediately — realtime handler shows splash for ALL clients
+      // exercise_started_at is the source of truth for timer reset
       await supabase.from('sessions').update({
         current_exercise: nextExercise,
         current_turn_index: 0,
         current_set: 1,
+        lobby_state: { ...activeSession.lobby_state, exercise_started_at: new Date().toISOString() },
       }).eq('id', activeSession.id);
-      activeSession.turn_order.forEach(uid => { timers[uid] = 0; });
     } else {
       await endSession();
     }

@@ -229,8 +229,10 @@ h3 { margin: 0 0 8px; font-size: 11px; font-weight: 600; color: var(--muted-colo
   font-size: 11px; font-weight: 700; color: var(--muted-color);
   transition: all .2s;
 }
-.set-dot.done { border-color: var(--teal); background: var(--teal-dim); color: var(--teal); animation: dotGleam 0.6s steps(4); }
-.set-dot.fail { border-color: var(--danger); background: var(--danger-dim); color: #F1948A; animation: dotFail 0.5s steps(3); }
+.set-dot.done { border-color: var(--teal); background: var(--teal-dim); color: var(--teal); }
+.set-dot.fail { border-color: var(--danger); background: var(--danger-dim); color: #F1948A; }
+.set-dot.done.gleam { animation: dotGleam 0.6s steps(4); }
+.set-dot.fail.gleam { animation: dotFail 0.5s steps(3); }
 .set-dot.current { border-color: var(--orange); background: var(--orange-dim); color: var(--orange); transform: scale(1.15); }
 
 /* 8-bit gleam on completed set dots */
@@ -494,20 +496,20 @@ body { padding-bottom: 60px; }
 .badge-orange:hover { box-shadow: 0 0 12px rgba(255,153,0,.4); }
 .badge-teal:hover   { box-shadow: 0 0 12px rgba(0,168,181,.35); }
 
-/* Paw print button — 6th set vote */
-.paw-btn {
-  position: fixed; bottom: 76px; right: 16px; z-index: 40;
-  width: 56px; height: 56px; border-radius: 50%;
-  background: #C0392B; color: #fff; border: 2px solid #E74C3C;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  box-shadow: 0 4px 16px rgba(192,57,43,0.5); cursor: pointer; gap: 1px;
+/* Extra set vote button */
+.extra-set-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 18px; border-radius: var(--radius);
+  border: 1px solid var(--danger); background: var(--danger-dim);
+  color: #E74C3C; font-size: 12px; font-weight: 700;
+  cursor: pointer; letter-spacing: 0.5px; text-transform: uppercase;
 }
-.paw-btn.voted {
-  background: var(--border); border-color: var(--muted-color);
-  box-shadow: 0 2px 8px rgba(0,0,0,0.3); opacity: 0.6;
+.extra-set-btn:active { transform: scale(0.96); }
+.extra-set-btn.voted {
+  border-color: var(--muted-color); background: var(--slate-dim);
+  color: var(--muted-color); opacity: 0.6;
 }
-.paw-btn .paw-icon { font-size: 22px; line-height: 1; }
-.paw-btn .paw-count { font-size: 9px; font-weight: 700; letter-spacing: 0.3px; }
+.extra-set-btn .claw-icon { width: 16px; height: 16px; flex-shrink: 0; }
 
 /* Checkbox accent */
 input[type="checkbox"] { transition: transform 0.1s cubic-bezier(0.34,1.5,0.64,1); }

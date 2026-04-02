@@ -1131,8 +1131,9 @@ function renderSession(container) {
       ${Array.from({ length: maxSets }, (_, i) => {
         const log = activeLogs[i];
         let cls = '';
-        if (log && log.success) cls = 'done';
-        else if (log && !log.success) cls = 'fail';
+        const isNewest = i === activeLogs.length - 1;
+        if (log && log.success) cls = 'done' + (isNewest ? ' gleam' : '');
+        else if (log && !log.success) cls = 'fail' + (isNewest ? ' gleam' : '');
         else if (i === activeLogs.length) cls = 'current';
         return `<div class="set-dot ${cls}">${i + 1}</div>`;
       }).join('')}
@@ -1152,6 +1153,19 @@ function renderSession(container) {
         <div class="muted">${mySetsDone ? 'All sets done — waiting for others' : 'Wait for your turn...'}</div>
       </div>
     `}
+
+    ${!extraSetActive ? `
+      <div style="text-align:center;margin:4px 0 12px">
+        <button class="extra-set-btn ${iVotedExtra ? 'voted' : ''}" id="extraSetBtn" ${iVotedExtra ? 'disabled' : ''}>
+          <svg class="claw-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round">
+            <path d="M6 3C5 8 5.5 14 7 20"/>
+            <path d="M12 2C12 8 12 14 12 20"/>
+            <path d="M18 3C19 8 18.5 14 17 20"/>
+          </svg>
+          ${iVotedExtra ? 'VOTED' : '+1 SET'} (${extraVoteCount}/${activeSession.turn_order.length})
+        </button>
+      </div>
+    ` : ''}
 
     <div class="section">
       <h3>Rest Timers</h3>
@@ -1209,42 +1223,24 @@ function renderSession(container) {
     container.querySelector('#failBtn')?.addEventListener('click', () => logSet(false));
   }
 
-  // Paw print FAB for extra set vote (only if not already unanimous)
-  const oldPaw = document.querySelector('.paw-btn');
-  if (oldPaw) oldPaw.remove();
-
-  if (!extraSetActive) {
-    const pawBtn = document.createElement('button');
-    pawBtn.className = `paw-btn ${iVotedExtra ? 'voted' : ''}`;
-    pawBtn.id = 'extraSetBtn';
-    if (iVotedExtra) pawBtn.disabled = true;
-    pawBtn.innerHTML = `
-      <span class="paw-icon">🐾</span>
-      <span class="paw-count">${extraVoteCount}/${activeSession.turn_order.length}</span>
-    `;
-    document.body.appendChild(pawBtn);
-
-    if (!iVotedExtra) {
-      pawBtn.addEventListener('click', async () => {
-        const votes = { ...(activeSession.lobby_state?.extra_set_votes || {}) };
-        votes[exercise] = { ...(votes[exercise] || {}), [user.id]: true };
-        const ls = { ...activeSession.lobby_state, extra_set_votes: votes };
-        activeSession.lobby_state = ls;
-        pawBtn.classList.add('voted');
-        pawBtn.disabled = true;
-        pawBtn.querySelector('.paw-count').textContent = `${extraVoteCount + 1}/${activeSession.turn_order.length}`;
-        await supabase.from('sessions').update({ lobby_state: ls }).eq('id', activeSession.id);
-      });
-    }
+  // Extra set vote handler (inline button)
+  const extraBtn = container.querySelector('#extraSetBtn');
+  if (extraBtn && !iVotedExtra) {
+    extraBtn.addEventListener('click', async () => {
+      const votes = { ...(activeSession.lobby_state?.extra_set_votes || {}) };
+      votes[exercise] = { ...(votes[exercise] || {}), [user.id]: true };
+      const ls = { ...activeSession.lobby_state, extra_set_votes: votes };
+      activeSession.lobby_state = ls;
+      extraBtn.classList.add('voted');
+      extraBtn.disabled = true;
+      extraBtn.textContent = `VOTED (${extraVoteCount + 1}/${activeSession.turn_order.length})`;
+      await supabase.from('sessions').update({ lobby_state: ls }).eq('id', activeSession.id);
+    });
   }
 }
 
 /** Render session summary after completion */
 function renderSessionSummary(container) {
-  // Remove paw button
-  const paw = document.querySelector('.paw-btn');
-  if (paw) paw.remove();
-
   const exercises = WORKOUTS[activeSession.workout_type];
   const nextWorkout = activeSession.workout_type === 'A' ? 'B' : 'A';
 
@@ -1352,9 +1348,6 @@ export function cleanupSession() {
   extraSetSplashShown = {};
   setLogs = [];
   timers = {};
-  // Remove paw button if present
-  const paw = document.querySelector('.paw-btn');
-  if (paw) paw.remove();
 }
 
 function esc(str) {

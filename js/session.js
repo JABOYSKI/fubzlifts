@@ -1120,33 +1120,18 @@ function renderSession(container) {
       <div class="exercise-meta">${maxSets} × 5 reps</div>
       <div class="claw-drawer" id="clawDrawer">
         <button class="claw-btn ${iVotedExtra ? 'voted' : ''}" id="clawVoteBtn" ${iVotedExtra || extraSetActive ? 'disabled' : ''}>
-          <svg viewBox="0 0 120 110" fill="none" xmlns="http://www.w3.org/2000/svg" class="claw-svg">
-            <!-- Claws — long, curved, sharp -->
-            <path d="M18 30C12 16 14 2 22 -4L20 0C16 8 17 18 22 28Z" fill="#2C2C2C"/>
-            <path d="M15 32C10 18 13 0 24 -6L21 -1C16 8 16 20 21 30Z" fill="#444"/>
-            <path d="M40 20C36 6 39 -8 48 -12L45 -6C40 4 40 12 44 20Z" fill="#2C2C2C"/>
-            <path d="M37 22C34 8 38 -6 50 -14L46 -8C40 2 39 14 43 22Z" fill="#444"/>
-            <path d="M64 20C60 6 63 -8 72 -12L69 -6C64 4 64 12 68 20Z" fill="#2C2C2C"/>
-            <path d="M61 22C58 8 62 -6 74 -14L70 -8C64 2 63 14 67 22Z" fill="#444"/>
-            <path d="M88 30C82 16 84 2 92 -4L90 0C86 8 87 18 92 28Z" fill="#2C2C2C"/>
-            <path d="M85 32C80 18 83 0 94 -6L91 -1C86 8 86 20 91 30Z" fill="#444"/>
-            <!-- Toes -->
-            <ellipse cx="30" cy="46" rx="13" ry="16" fill="#C0392B"/>
-            <ellipse cx="52" cy="38" rx="12" ry="15" fill="#C0392B"/>
-            <ellipse cx="68" cy="38" rx="12" ry="15" fill="#C0392B"/>
-            <ellipse cx="90" cy="46" rx="13" ry="16" fill="#C0392B"/>
-            <!-- Paw pad -->
-            <ellipse cx="60" cy="70" rx="34" ry="28" fill="#C0392B"/>
-            <!-- Toe pads (lighter) -->
-            <ellipse cx="30" cy="48" rx="7" ry="8" fill="#E8725C"/>
-            <ellipse cx="52" cy="40" rx="6" ry="7" fill="#E8725C"/>
-            <ellipse cx="68" cy="40" rx="6" ry="7" fill="#E8725C"/>
-            <ellipse cx="90" cy="48" rx="7" ry="8" fill="#E8725C"/>
-            <!-- Central pad -->
-            <ellipse cx="60" cy="72" rx="18" ry="14" fill="#E8725C"/>
-            <!-- Stripes -->
-            <path d="M42 62C48 56 54 58 58 65" stroke="#8B1A1A" stroke-width="2" stroke-linecap="round" fill="none"/>
-            <path d="M58 68C64 62 72 63 76 70" stroke="#8B1A1A" stroke-width="2" stroke-linecap="round" fill="none"/>
+          <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="claw-svg">
+            <!-- Toe pads with claws -->
+            <ellipse cx="22" cy="32" rx="10" ry="13" fill="#C0392B"/>
+            <path d="M16 20C13 12 15 4 20 1C18 9 19 16 22 22" fill="#2C2C2C"/>
+            <ellipse cx="42" cy="22" rx="9" ry="12" fill="#C0392B"/>
+            <path d="M37 10C35 2 38 -5 43 -7C40 1 40 6 43 12" fill="#2C2C2C"/>
+            <ellipse cx="58" cy="22" rx="9" ry="12" fill="#C0392B"/>
+            <path d="M54 10C52 2 55 -5 60 -7C57 1 57 6 60 12" fill="#2C2C2C"/>
+            <ellipse cx="78" cy="32" rx="10" ry="13" fill="#C0392B"/>
+            <path d="M74 20C71 12 73 4 78 1C76 9 77 16 80 22" fill="#2C2C2C"/>
+            <!-- Main pad -->
+            <path d="M50 95C28 95 14 82 14 68C14 54 30 46 50 46C70 46 86 54 86 68C86 82 72 95 50 95Z" fill="#C0392B"/>
           </svg>
         </button>
       </div>
@@ -1271,21 +1256,21 @@ function renderSession(container) {
       activeSession.lobby_state = ls;
       clawBtn.classList.add('voted');
       clawBtn.disabled = true;
-      // Show pips immediately
-      const pipsContainer = drawer.querySelector('.vote-pips');
+      // Show pips immediately in the banner (outside drawer)
+      const bannerEl = container.querySelector('#exerciseBanner');
+      let pipsContainer = bannerEl.querySelector('.vote-pips');
+      const pipsHtml = activeSession.turn_order.map(uid =>
+        `<span class="vote-pip ${votes[exercise]?.[uid] ? 'lit' : ''}"></span>`
+      ).join('');
       if (!pipsContainer) {
         const pipsDiv = document.createElement('div');
         pipsDiv.className = 'vote-pips';
-        pipsDiv.innerHTML = activeSession.turn_order.map(uid =>
-          `<span class="vote-pip ${votes[exercise]?.[uid] ? 'lit' : ''}"></span>`
-        ).join('');
-        drawer.appendChild(pipsDiv);
+        pipsDiv.style.marginTop = '8px';
+        pipsDiv.innerHTML = pipsHtml;
+        bannerEl.appendChild(pipsDiv);
       } else {
-        pipsContainer.innerHTML = activeSession.turn_order.map(uid =>
-          `<span class="vote-pip ${votes[exercise]?.[uid] ? 'lit' : ''}"></span>`
-        ).join('');
+        pipsContainer.innerHTML = pipsHtml;
       }
-      drawer.classList.add('open');
       await supabase.from('sessions').update({ lobby_state: ls }).eq('id', activeSession.id);
     });
   }

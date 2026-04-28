@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//g/Vibecode//**)",
+      "Bash(cp -r /g/Vibecode/fubzlifts-v1.1 /g/Vibecode/fubzlifts-v2)",
+      "Bash(rm -rf /g/Vibecode/fubzlifts-v2/.git)"
+    ]
+  }
+}

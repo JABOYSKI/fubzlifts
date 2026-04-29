@@ -13,8 +13,44 @@
   <meta name="mobile-web-app-capable" content="yes"/>
   <meta name="apple-mobile-web-app-capable" content="yes"/>
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <!-- Inline boot styles so the loading overlay paints instantly, before
+       the external stylesheet is fetched. Avoids any flash of dark page. -->
+  <style>
+    body { margin: 0; background: #131921; color: #F0F2F2; }
+    #bootSplash {
+      position: fixed; inset: 0; z-index: 9999;
+      background: #131921;
+      display: flex; align-items: center; justify-content: center;
+      transition: opacity 0.35s ease;
+    }
+    #bootSplash.hide { opacity: 0; pointer-events: none; }
+    .boot-spinner { position: relative; width: 110px; height: 110px; }
+    .boot-ring {
+      position: absolute; inset: 0; border-radius: 50%;
+      border: 3px solid rgba(255, 153, 0, 0.18);
+      border-top-color: #FF9900;
+      animation: bootSpin 1.1s linear infinite;
+    }
+    .boot-logo {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 80px; height: 80px; border-radius: 50%; object-fit: cover;
+    }
+    @keyframes bootSpin { to { transform: rotate(360deg); } }
+  </style>
 </head>
 <body>
+
+  <!-- Boot loading overlay — visible by default, hidden by JS once init
+       completes. Re-shown by invisibleReload() and the SW update handler
+       to mask the reload itself, so the user sees one continuous loading
+       state instead of a fade-to-black flash. -->
+  <div id="bootSplash">
+    <div class="boot-spinner">
+      <div class="boot-ring"></div>
+      <img src="icons/icon-192.png" alt="" class="boot-logo" />
+    </div>
+  </div>
 
   <!-- Header -->
   <header>
@@ -82,8 +118,9 @@
           if (Date.now() - last < 30 * 1000) return;
           refreshing = true;
           sessionStorage.setItem('fubz_last_reload', String(Date.now()));
-          document.body.style.transition = 'opacity 0.3s ease';
-          document.body.style.opacity = '0';
+          // Re-show the boot loader so the impending reload looks like a
+          // continuous loading state, not a fade-to-black flash.
+          document.getElementById('bootSplash')?.classList.remove('hide');
           setTimeout(() => window.location.reload(), 350);
         }
       });

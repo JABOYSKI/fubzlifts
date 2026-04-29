@@ -50,8 +50,9 @@ function invisibleReload() {
   }
   sessionStorage.setItem('fubz_last_reload', String(Date.now()));
   sessionStorage.setItem('fubz_reload_count', String(count + 1));
-  document.body.style.transition = 'none';
-  document.body.style.opacity = '0';
+  // Re-show the boot loader so the page-being-replaced is masked by the
+  // same loading UI the user sees on a normal load. No fade-to-black flash.
+  document.getElementById('bootSplash')?.classList.remove('hide');
   window.location.reload();
 }
 
@@ -197,7 +198,7 @@ function showAuthScreen() {
 function dismissAuthScreen() {
   document.querySelector('header').style.display = '';
   document.querySelector('.container').style.display = '';
-  document.body.style.opacity = '1';
+  document.getElementById('bootSplash')?.classList.add('hide');
   const splash = document.getElementById('authSplash');
   if (splash) {
     const screen = splash.querySelector('.splash-screen');

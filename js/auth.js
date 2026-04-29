@@ -168,8 +168,11 @@ export function renderAuth(container) {
       </div>
     `;
 
-    // Fade body in once splash is painted
-    requestAnimationFrame(() => { document.body.style.opacity = '1'; });
+    // Hide the boot loader once the splash is painted, so it crossfades
+    // smoothly into the auth screen instead of flashing.
+    requestAnimationFrame(() => {
+      document.getElementById('bootSplash')?.classList.add('hide');
+    });
 
     container.querySelector('#authToggle').addEventListener('click', () => {
       mode = isLogin ? 'register' : 'login';

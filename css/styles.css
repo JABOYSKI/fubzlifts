@@ -41,8 +41,8 @@ body {
   background: var(--bg);
   color: var(--text);
   font: 14px/1.55 "Amazon Ember", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial;
-  opacity: 0;
-  transition: opacity 0.35s ease;
+  /* No opacity:0 here — #bootSplash overlay covers the page during load
+     and reload (see index.html). It fades out once init completes. */
 }
 
 /* ===== View transitions (Chrome 111+) =====

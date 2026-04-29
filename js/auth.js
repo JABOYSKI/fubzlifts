@@ -131,28 +131,30 @@ export function renderAuth(container) {
             ? 'Sign in to sync with your crew.'
             : 'Create an account to start lifting.'}</p>
 
+          <form id="authForm" novalidate>
           ${!isLogin ? `
             <div class="splash-field">
-              <label class="splash-label">Alias (visible to group)</label>
-              <input class="field" id="authAlias" placeholder="e.g. BigLifter42" maxlength="20" autocomplete="off" />
+              <label class="splash-label" for="authAlias">Alias (visible to group)</label>
+              <input class="field" id="authAlias" name="alias" placeholder="e.g. BigLifter42" maxlength="20" autocomplete="off" />
             </div>
           ` : ''}
           <div class="splash-field">
-            <label class="splash-label">Email</label>
-            <input class="field" id="authEmail" type="email" placeholder="you@email.com" autocomplete="email" />
+            <label class="splash-label" for="authEmail">Email</label>
+            <input class="field" id="authEmail" name="email" type="email" placeholder="you@email.com" autocomplete="email" />
           </div>
           <div class="splash-field">
-            <label class="splash-label">Password</label>
-            <input class="field" id="authPass" type="password" placeholder="••••••••" minlength="6" autocomplete="${isLogin ? 'current-password' : 'new-password'}" />
+            <label class="splash-label" for="authPass">Password</label>
+            <input class="field" id="authPass" name="password" type="password" placeholder="••••••••" minlength="6" autocomplete="${isLogin ? 'current-password' : 'new-password'}" />
           </div>
           <div class="splash-field" style="flex-direction:row;align-items:center;gap:8px">
-            <input type="checkbox" id="authRemember" style="accent-color:var(--orange);width:16px;height:16px" />
+            <input type="checkbox" id="authRemember" name="remember" style="accent-color:var(--orange);width:16px;height:16px" />
             <label for="authRemember" class="splash-label" style="margin:0;font-size:13px;cursor:pointer">Remember me</label>
           </div>
           <div id="authError" class="splash-error"></div>
-          <button class="btn btn-primary splash-submit" id="authSubmit">
+          <button type="submit" class="btn btn-primary splash-submit" id="authSubmit">
             ${isLogin ? 'Sign In' : 'Create Account'}
           </button>
+          </form>
           <div class="splash-toggle">
             ${isLogin
               ? 'No account? <a id="authToggle">Create one</a>'
@@ -174,7 +176,8 @@ export function renderAuth(container) {
       render();
     });
 
-    container.querySelector('#authSubmit').addEventListener('click', async () => {
+    container.querySelector('#authForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
       const btn = container.querySelector('#authSubmit');
       const errEl = container.querySelector('#authError');
       const email = container.querySelector('#authEmail').value.trim();
@@ -204,13 +207,6 @@ export function renderAuth(container) {
         const result = await signUp(email, pass, alias);
         if (!result.ok) { btn.disabled = false; btn.textContent = 'Create Account'; errEl.textContent = result.msg; }
       }
-    });
-
-    // Enter key submits
-    container.querySelectorAll('.field').forEach(f => {
-      f.addEventListener('keydown', e => {
-        if (e.key === 'Enter') container.querySelector('#authSubmit').click();
-      });
     });
 
     // Check for update — clears all caches, unregisters SW, hard reloads with cache bust

@@ -7,17 +7,52 @@ export function formatTime(seconds) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-/** Generate a 5-letter uppercase join code */
+/** Pool of 4–8 character words used to build join codes. Curated to be
+ *  family-friendly and easy to say aloud. ~180 words → 180³ ≈ 5.8M unique
+ *  3-word combinations, so collisions are functionally impossible until you
+ *  have thousands of active groups. */
+const JOIN_WORDS = [
+  'ALPHA','ANKLES','ANVIL','APEX','ARMOR','ASHES','ATOM',
+  'BACK','BACON','BANANA','BANG','BARBELL','BARN','BEANS','BEAR','BEAST','BENCH','BICEPS','BISON','BLAST','BOLD','BOOM','BRASS','BRAWN','BRONZE','BRUTAL','BUFFALO','BULL','BUTTER',
+  'CALVES','CARDIO','CASTLE','CHAIN','CHALK','CHEST','CHICKEN','CHROME','CINDER','CLANK','COMET','COPPER','CORE','CRUSH','CRYSTAL','CURLS',
+  'DEADS','DELTS','DIAMOND','DRAGON','DRIVE','DUNK',
+  'EAGLE','EGGS','ELITE','EMBER','EPIC',
+  'FALCON','FIBER','FIERCE','FIERY','FLAME','FLAMING','FLEX','FOCUS','FOREST','FORGE','FROST',
+  'GAINS','GAUNTLET','GIANT','GIRTH','GLACIER','GLUTES','GOAT','GOLD','GORILLA','GRAND','GRANITE','GRIM','GRIND','GRIP',
+  'HAMMER','HARDY','HAWK','HEAVY','HIPPO','HUGE','HULKS','HUSTLE','HYPER',
+  'IRON','IRONS',
+  'JOINT','JUICY','JUNGLE',
+  'KALE','KETTLE','KINGS','KNEEL','KNEES','KODIAK','KRAKEN',
+  'LANCE','LASER','LEGS','LIFT','LIFTS','LIGHT','LION',
+  'MAGMA','MAMMOTH','MARBLE','MEAN','MEDAL','MIGHT','MIGHTY','MONSTER','MOOSE','MOUNTAIN','MYTHIC',
+  'NECK','NERVE','NOBLE',
+  'OATMEAL','OATS','OCEAN','OMEGA',
+  'PLANET','PLANK','PLANTER','PLATE','POLAR','POWER','PRESS','PRIME','PROTEIN','PULL','PUMP','PUMPKIN','PUSH','PYTHON',
+  'QUADS','QUARTZ',
+  'RACK','RAGING','REBAR','REPS','RHINO','RICE','RIVER','ROCKET','ROYAL','RUBY','RUGGED','RUNE',
+  'SAGA','SAVAGE','SETS','SHADOW','SHARP','SHIELD','SILVER','SMASH','SOLID','SPATULA','SPHINX','SQUAT','STAG','STEAK','STEED','STEEL','STORM','STOUT','SUPER','SURGE','SWOLE','SWORD',
+  'TAVERN','THUNDER','TIGER','TITAN','TOAST','TOUGH','TRAPS','TUNDRA','TURBO',
+  'ULTRA',
+  'VAULT','VICE','VIGOR','VIPER',
+  'WAVE','WEIGHT','WILD','WIZARD','WOLF','WRATH',
+  'XENON','YIELD','ZONES','ZONK',
+];
+
+/** Build a 3-word join code separated by spaces, e.g. "FLAMING SQUAT PIE".
+ *  Caller is responsible for verifying uniqueness against existing rows
+ *  (see createGroup). With ~180 words the keyspace is ~5.8M, so collisions
+ *  are functionally never an issue at the scales this app sees. */
 export function generateJoinCode() {
-  const words = [
-    'FLAME','SQUAT','PRESS','STEEL','POWER','CRUSH','GRIND','HEAVY',
-    'FORGE','BEAST','VIGOR','SURGE','BRAWN','CLANK','DRIVE','FOCUS',
-    'GAINS','HULKS','IRONS','JOINT','KINGS','LIFTS','MIGHT','NERVE',
-    'OMEGA','PLANK','QUADS','REBAR','SWOLE','TITAN','ULTRA','VAULT',
-    'WRATH','XENON','YIELD','ZONES','ARMOR','BENCH','CHAIN','DELTS',
-    'ELITE','FIBER','GIRTH','HYPER','JUICY','KNEEL','LANCE','MEDAL',
-  ];
-  return words[Math.floor(Math.random() * words.length)];
+  const pick = () => JOIN_WORDS[Math.floor(Math.random() * JOIN_WORDS.length)];
+  return `${pick()} ${pick()} ${pick()}`;
+}
+
+/** Normalize a join code for matching. Uppercase, trim, and collapse any
+ *  internal whitespace runs to single spaces — so "flaming  squat  pie",
+ *  "  Flaming Squat Pie  ", and "FLAMING SQUAT PIE" all resolve to the
+ *  same canonical form used both in storage and in joinGroup() lookup. */
+export function normalizeJoinCode(input) {
+  return (input || '').trim().toUpperCase().replace(/\s+/g, ' ');
 }
 
 /** Show a toast notification */
@@ -29,11 +64,18 @@ export function toast(msg, duration = 2500) {
   el._tid = setTimeout(() => el.classList.remove('show'), duration);
 }
 
-/** Show/hide views */
+/** Show/hide views with a smooth crossfade where supported. */
 export function showView(viewId) {
-  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-  const view = document.getElementById(viewId);
-  if (view) view.classList.add('active');
+  const swap = () => {
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    const view = document.getElementById(viewId);
+    if (view) view.classList.add('active');
+  };
+  if (document.startViewTransition && !document.documentElement.classList.contains('vt-disabled')) {
+    document.startViewTransition(swap);
+  } else {
+    swap();
+  }
 }
 
 /** Exercises for each workout type */

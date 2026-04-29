@@ -1,4 +1,4 @@
-// FubzLifts Service Worker — cache-first with auto-update notification
+﻿// FubzLifts Service Worker â€” cache-first with auto-update notification
 const CACHE = 'fubzlifts-BUILD_TIMESTAMP';
 const STATIC_ASSETS = [
   './',
@@ -17,10 +17,14 @@ const STATIC_ASSETS = [
   './icons/favicon-32.png',
 ];
 
+const IS_DEV = self.location.hostname === 'localhost' || self.location.hostname === '127.0.0.1';
+
 self.addEventListener('install', event => {
-  event.waitUntil(
-    caches.open(CACHE).then(cache => cache.addAll(STATIC_ASSETS))
-  );
+  if (!IS_DEV) {
+    event.waitUntil(
+      caches.open(CACHE).then(cache => cache.addAll(STATIC_ASSETS))
+    );
+  }
   self.skipWaiting();
 });
 
@@ -38,14 +42,21 @@ self.addEventListener('activate', event => {
   self.clients.claim();
 });
 
+// In dev (localhost), deploy.bat never runs, so CACHE stays at the literal
+// 'fubzlifts-BUILD_TIMESTAMP' and the cache-first handler would pin a stale
+// copy of any file forever â€” including a half-saved JS file with a syntax
+// error, which produces a permanently blank page. Bypass the SW entirely
+// on localhost (see IS_DEV check below) so dev edits show up on reload.
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
-  // Let Supabase API calls bypass the SW entirely — browser handles them directly
+  // Let Supabase API calls bypass the SW entirely â€” browser handles them directly
   // This prevents the SW from interfering with POST/PATCH/DELETE after tab resume
   if (url.hostname.includes('supabase')) {
     return;
   }
+
+  if (IS_DEV) return;
 
   // Network-first for esm.sh CDN imports
   if (url.hostname.includes('esm.sh')) {

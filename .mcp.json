@@ -2,7 +2,11 @@
   "mcpServers": {
     "chrome-devtools": {
       "command": "npx",
-      "args": ["chrome-devtools-mcp@latest"]
+      "args": [
+        "chrome-devtools-mcp@latest",
+        "--user-data-dir",
+        "C:\\Users\\JABOYSKI 2025\\.cache\\chrome-devtools-mcp\\fubzlifts-v2-profile"
+      ]
     }
   }
 }

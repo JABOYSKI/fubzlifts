@@ -46,21 +46,29 @@ FubzLifts is a real-time group workout tracker built around the **StrongLifts 5�
 ## Session Flow (This is the heart of the app)
 
 ### Starting a Session
-1. Any group member can start a session for a group
-2. The app determines if it's an **A day or B day** based on the group's history
-3. Members "tap in" to join the session — they can join late
-4. **Turn order is set at session start** and stays fixed for the entire session (same order every exercise)
-5. Even a single person can run a session solo — the logic is the same, just one person in the rotation
+1. Any group member can start a session for a group, which opens the **Workout Lobby** (not the active session yet — it's a staging area).
+2. **Workout type (A or B) is chosen by member vote**, not by history. Each member taps A or B; running tally shown live.
+3. The **host** (group owner / admin who started it) sees an additional Host Controls panel and can override the vote (workout-type override) and toggle **Simultaneous Sets** for individual exercises (see below).
+4. Each member must tap **"Ready Up"** before the session can begin. The host's "Start Workout" button is gated until everyone is ready (`N/N ready`). Members can un-ready by tapping again.
+5. Members "tap in" to join the lobby — they can also join late, after the active session has begun.
+6. **Turn order is set at session start** (when the host taps Start Workout) and stays fixed for the entire session (same order every exercise).
+7. Even a single person can run a session solo — same lobby flow, they ready up themselves and start.
 
 ### During an Exercise (e.g., Squat 5×5)
 - The app shows: **current exercise, whose turn it is, their required weight, and set/rep count**
-- Only the person whose turn it is has the active controls
+- Only the person whose turn it is has the active controls (in turn-based mode)
 - **Two buttons for the active person:**
   - **"DONE" (prominent, primary)** — successfully completed the set (all 5 reps). Logs the set, starts their rest timer, advances to the next person
   - **"FAIL" (smaller, secondary)** — could not complete all reps. Still logs and advances. Also used to skip an exercise entirely (just press fail for each set)
 - After pressing Done/Fail, that person's **rest timer starts counting up** and is visible to everyone
 - The next person in the rotation becomes active
 - Round-robin continues until everyone completes all prescribed sets for that exercise
+
+### Simultaneous Sets Mode (per exercise)
+Some exercises don't share equipment (e.g., dumbbell rows in a well-stocked gym, or bodyweight finishers). For these, the host can flip an exercise into **Simultaneous Sets** mode in the lobby's Host Controls.
+- **Per-exercise toggle**: simultaneous mode is set independently for each exercise in the workout — Squat can be turn-based while Row is simultaneous, etc. Stored on `sessions.lobby_state.simultaneous` as `{ exercise_name: boolean }`.
+- **Behavior**: in simultaneous mode there's no turn rotation; every member sees their own weight/progress and presses Done/Fail for themselves. The "Up Next" indicator hides; rest timers tick for everyone (no "active" exemption).
+- The exercise advances to the next one (or the session ends) once **all members** have logged all their sets.
 
 ### Rest Timer Stack
 - **Every group member's rest timer is visible at all times** during a session
@@ -69,8 +77,8 @@ FubzLifts is a real-time group workout tracker built around the **StrongLifts 5�
 - The timer stack gives everyone situational awareness of pacing
 
 ### Between Exercises
-- When all members finish their sets for an exercise, show a **brief congratulatory splash** (e.g., "Squats complete! 💪") before auto-advancing to the next exercise
-- No manual confirmation needed to advance
+- When all members finish their sets for an exercise, show a **congratulatory splash** — the FubzLifts cat character pops up with a retro-RPG dialog box. The splash is a deliberate moment, not a quick auto-fade.
+- The user **taps anywhere to dismiss** the splash and continue to the next exercise. This is intentional — the celebration earns a beat of attention.
 
 ### Ending a Session
 - Session ends when all exercises for the day are complete
@@ -189,23 +197,30 @@ group_members
   is_admin      BOOLEAN DEFAULT false
   PRIMARY KEY (group_id, user_id)
 
-user_weights
+profile_weights
+  -- A user's working weights follow them across all their groups
+  -- (NOT per-group — one set of weights per user, period).
   user_id       UUID (FK → users.id)
-  group_id      UUID (FK → groups.id)
   exercise      TEXT ('squat', 'bench', 'ohp', 'row', 'deadlift')
   weight_lbs    NUMERIC NOT NULL
-  fail_streak   INTEGER DEFAULT 0
-  PRIMARY KEY (user_id, group_id, exercise)
+  -- fail_streak  INTEGER DEFAULT 0  -- planned for deload protocol; not yet implemented in code
+  PRIMARY KEY (user_id, exercise)
 
 sessions
-  id            UUID (PK)
-  group_id      UUID (FK → groups.id)
-  workout_type  TEXT ('A' or 'B')
-  status        TEXT ('active', 'completed')
-  turn_order    TEXT[] (array of user_ids)
-  current_exercise TEXT (nullable)
-  started_at    TIMESTAMPTZ
-  ended_at      TIMESTAMPTZ (nullable)
+  id                  UUID (PK)
+  group_id            UUID (FK → groups.id)
+  workout_type        TEXT ('A' or 'B')   -- chosen by lobby vote; host can override
+  status              TEXT ('lobby', 'active', 'completed')
+  turn_order          TEXT[] (array of user_ids; finalized when host taps Start Workout)
+  current_exercise    TEXT (nullable)
+  current_turn_index  INTEGER DEFAULT 0   -- index into turn_order for whose turn is active
+  lobby_state         JSONB
+    -- holds per-member ready/vote state and host-controlled per-exercise toggles, e.g.:
+    --   { "members": { "<uid>": { "ready": true, "vote": "A" } },
+    --     "simultaneous": { "row": true, "ohp": false },
+    --     "dl_sets": 1 }
+  started_at          TIMESTAMPTZ
+  ended_at            TIMESTAMPTZ (nullable)
 
 session_members
   session_id    UUID (FK → sessions.id)
@@ -239,10 +254,12 @@ set_logs
 - [ ] Group creation with 5-char word join code
 - [ ] Group joining via code
 - [ ] A/B day tracking per group
-- [ ] Start session → determine A or B day → set turn order
+- [ ] Workout Lobby: vote on A/B, ready-up gating, host override for workout type and per-exercise Simultaneous Sets
+- [ ] Start session from lobby → set turn order from members who readied up
 - [ ] Round-robin set tracking with Done/Fail buttons
+- [ ] Simultaneous Sets mode (per-exercise; everyone lifts at once, no turn rotation)
 - [ ] Real-time rest timer stack (visible for all members)
-- [ ] Auto-advance between exercises with congratulatory splash
+- [ ] Congratulatory splash between exercises (cat dialog box; tap-anywhere to continue — intentionally manual)
 - [ ] Session summary on completion
 - [ ] Auto-progression (+5 lbs on success)
 - [ ] Deload prompt after 3 consecutive fails (ask, don't auto-apply)

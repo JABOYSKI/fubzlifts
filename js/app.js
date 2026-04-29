@@ -23,11 +23,44 @@ function saveResumeState() {
   }
 }
 
+// All recovery paths funnel through invisibleReload. Two layers of guard:
+//   1. MIN_RELOAD_INTERVAL_MS: no two reloads within 30s. Catches fast
+//      cascades (multiple triggers firing on the same event).
+//   2. MAX_RELOADS_PER_SESSION: cap at 2 reloads per tab session. Catches
+//      slow loops (e.g., a stale SW reactivating on every load, or auth
+//      stuck in a bad cached state). Reset on first successful click —
+//      that's strong evidence the page is functional, so future reloads
+//      (overnight resume etc.) should work normally.
+// Counter and timestamp both live in sessionStorage so they survive the
+// reload itself but reset on tab close.
+const MIN_RELOAD_INTERVAL_MS = 30 * 1000;
+const MAX_RELOADS_PER_SESSION = 2;
+
 function invisibleReload() {
+  const last = parseInt(sessionStorage.getItem('fubz_last_reload') || '0', 10);
+  const sinceLast = Date.now() - last;
+  if (sinceLast < MIN_RELOAD_INTERVAL_MS) {
+    console.warn('[FubzLifts] Reload suppressed — last reload was', Math.round(sinceLast / 1000) + 's ago');
+    return;
+  }
+  const count = parseInt(sessionStorage.getItem('fubz_reload_count') || '0', 10);
+  if (count >= MAX_RELOADS_PER_SESSION) {
+    console.warn('[FubzLifts] Reload suppressed — already reloaded', count, 'times this session. Likely a stuck loop; clear site data or close + reopen the tab to reset.');
+    return;
+  }
+  sessionStorage.setItem('fubz_last_reload', String(Date.now()));
+  sessionStorage.setItem('fubz_reload_count', String(count + 1));
   document.body.style.transition = 'none';
   document.body.style.opacity = '0';
   window.location.reload();
 }
+
+// First successful click ⇒ the page is functional ⇒ clear the reload
+// counter so legitimate future reloads (auth refresh, deploy detection,
+// stall recovery) aren't blocked.
+document.addEventListener('click', () => {
+  sessionStorage.removeItem('fubz_reload_count');
+}, { once: true, passive: true });
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {

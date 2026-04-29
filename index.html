@@ -74,7 +74,14 @@
       let refreshing = false;
       navigator.serviceWorker.addEventListener('message', e => {
         if (e.data && e.data.type === 'SW_UPDATED' && !refreshing) {
+          // Same anti-loop guard as invisibleReload() in app.js — if anything
+          // reloaded the page in the last 30s, don't reload again. Stops the
+          // SW activate → reload → SW activate again cascade if the SW bytes
+          // appear unstable to the browser.
+          var last = parseInt(sessionStorage.getItem('fubz_last_reload') || '0', 10);
+          if (Date.now() - last < 30 * 1000) return;
           refreshing = true;
+          sessionStorage.setItem('fubz_last_reload', String(Date.now()));
           document.body.style.transition = 'opacity 0.3s ease';
           document.body.style.opacity = '0';
           setTimeout(() => window.location.reload(), 350);

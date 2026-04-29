@@ -1,11 +1,11 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
   <title>FubzLifts</title>
-  <meta name="description" content="FubzLifts — a real-time group StrongLifts 5×5 tracker for 2–4 lifters sharing a barbell rack."/>
-  <link rel="stylesheet" href="css/styles.css"/>
+  <meta name="description" content="FubzLifts â€” a real-time group StrongLifts 5Ã—5 tracker for 2â€“4 lifters sharing a barbell rack."/>
+  <link rel="stylesheet" href="css/styles.css?v=2026-04-29T21:56:46Z"/>
   <link rel="manifest" href="manifest.json"/>
   <meta name="theme-color" content="#232F3E"/>
   <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png"/>
@@ -41,7 +41,7 @@
 </head>
 <body>
 
-  <!-- Boot loading overlay — visible by default, hidden by JS once init
+  <!-- Boot loading overlay â€” visible by default, hidden by JS once init
        completes. Re-shown by invisibleReload() and the SW update handler
        to mask the reload itself, so the user sees one continuous loading
        state instead of a fade-to-black flash. -->
@@ -101,8 +101,16 @@
   <!-- Toast -->
   <div id="toast"></div>
 
-  <!-- App Script -->
-  <script type="module" src="js/app.js"></script>
+  <!-- App Script. The version query string is replaced at deploy time by
+       deploy.bat â€” every deploy produces a unique URL the browser must
+       fetch fresh, sidestepping HTTP cache TTLs that would otherwise serve
+       stale JS for up to 10 minutes after a deploy. -->
+  <script type="module" src="js/app.js?v=2026-04-29T21:56:46Z"></script>
+
+  <!-- Build timestamp also inlined here so the splash's "updated" line is
+       guaranteed fresh per deploy without depending on version.js (which
+       ES-module imports inside app.js can't easily cache-bust). -->
+  <script>window.FUBZ_BUILD_TIME = '2026-04-29T21:56:46Z';</script>
 
   <!-- Service Worker Registration + Auto-update listener -->
   <script>
@@ -110,9 +118,9 @@
       let refreshing = false;
       navigator.serviceWorker.addEventListener('message', e => {
         if (e.data && e.data.type === 'SW_UPDATED' && !refreshing) {
-          // Same anti-loop guard as invisibleReload() in app.js — if anything
+          // Same anti-loop guard as invisibleReload() in app.js â€” if anything
           // reloaded the page in the last 30s, don't reload again. Stops the
-          // SW activate → reload → SW activate again cascade if the SW bytes
+          // SW activate â†’ reload â†’ SW activate again cascade if the SW bytes
           // appear unstable to the browser.
           var last = parseInt(sessionStorage.getItem('fubz_last_reload') || '0', 10);
           if (Date.now() - last < 30 * 1000) return;

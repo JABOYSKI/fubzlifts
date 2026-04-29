@@ -1,7 +1,14 @@
 // Authentication module
 import { supabase } from './supabase.js';
 import { toast, STARTING_WEIGHT } from './utils.js';
-import { BUILD_TIME } from './version.js';
+import { BUILD_TIME as BUILD_TIME_FROM_FILE } from './version.js';
+
+// Prefer the inline-stamped BUILD_TIME from index.html (which is cache-busted
+// per deploy, see ?v=BUILD_TIMESTAMP). Fall back to the import only if the
+// inline script didn't run (e.g. dev with literal placeholder).
+const BUILD_TIME = (typeof window !== 'undefined' && window.FUBZ_BUILD_TIME && window.FUBZ_BUILD_TIME !== 'BUILD_TIMESTAMP')
+  ? window.FUBZ_BUILD_TIME
+  : BUILD_TIME_FROM_FILE;
 
 let currentUser = null;
 

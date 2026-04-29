@@ -13,6 +13,14 @@ echo export const BUILD_TIME = '%TIMESTAMP%';>> js\version.js
 :: We pass TIMESTAMP via env var to dodge cmd's quoting rules around the regex.
 set FUBZ_TS=%TIMESTAMP%
 powershell -NoProfile -Command "$ts = $env:FUBZ_TS; $sw = Get-Content 'sw.js' -Raw; $sw = [regex]::Replace($sw, \"'fubzlifts-[^']*'\", \"'fubzlifts-$ts'\"); Set-Content -Path 'sw.js' -Value $sw -NoNewline -Encoding UTF8"
+
+:: Stamp BUILD_TIMESTAMP placeholders in index.html — these are the actual
+:: cache-bust mechanism. The browser's HTTP cache keys by URL; with a fresh
+:: timestamp per deploy, the URL changes and the browser must refetch. The
+:: regexes also accept a previous timestamp so re-runs of deploy.bat work.
+::   - ?v=... on script/link tags (forces fresh CSS/JS fetch)
+::   - window.FUBZ_BUILD_TIME = '...' (the splash's "updated" timestamp)
+powershell -NoProfile -Command "$ts = $env:FUBZ_TS; $h = Get-Content 'index.html' -Raw; $h = [regex]::Replace($h, '\?v=[^\"''\s>]*', \"?v=$ts\"); $h = [regex]::Replace($h, \"window\.FUBZ_BUILD_TIME = '[^']*'\", \"window.FUBZ_BUILD_TIME = '$ts'\"); Set-Content -Path 'index.html' -Value $h -NoNewline -Encoding UTF8"
 set FUBZ_TS=
 
 :: Stage, commit, push.

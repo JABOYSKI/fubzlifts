@@ -227,9 +227,12 @@ export function setupPawListeners() {
       castPawVote();
       return;
     }
-    // Banner click → reveal the secret paw locally.
-    if (e.target.closest('.exercise-banner') && !pawRevealed) {
-      pawRevealed = true;
+    // Banner click → toggle the secret paw locally. If a vote is in
+    // progress, the paw stays visible regardless (lobby_state.paw_vote
+    // wins over pawRevealed in updatePawVoteUI) so a member can't hide
+    // the button while their teammates still need to vote.
+    if (e.target.closest('.exercise-banner')) {
+      pawRevealed = !pawRevealed;
       updatePawVoteUI();
     }
   });

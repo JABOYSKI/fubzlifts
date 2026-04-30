@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
   <title>FubzLifts</title>
   <meta name="description" content="FubzLifts â€” a real-time group StrongLifts 5Ã—5 tracker for 2â€“4 lifters sharing a barbell rack."/>
-  <link rel="stylesheet" href="css/styles.css?v=2026-04-29T21:56:46Z"/>
+  <link rel="stylesheet" href="css/styles.css?v=2026-04-30T16:02:25Z"/>
   <link rel="manifest" href="manifest.json"/>
   <meta name="theme-color" content="#232F3E"/>
   <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png"/>
@@ -51,6 +51,21 @@
       <img src="icons/icon-192.png" alt="" class="boot-logo" />
     </div>
   </div>
+
+  <!-- Reusable SVG symbols. Hidden but referenced via <use> elsewhere. -->
+  <svg style="position:absolute;width:0;height:0;overflow:hidden" aria-hidden="true">
+    <symbol id="icon-paw" viewBox="0 0 100 100">
+      <ellipse cx="50" cy="68" rx="24" ry="22"/>
+      <ellipse cx="22" cy="38" rx="8" ry="12" transform="rotate(-20 22 38)"/>
+      <ellipse cx="40" cy="22" rx="7" ry="11" transform="rotate(-8 40 22)"/>
+      <ellipse cx="60" cy="22" rx="7" ry="11" transform="rotate(8 60 22)"/>
+      <ellipse cx="78" cy="38" rx="8" ry="12" transform="rotate(20 78 38)"/>
+    </symbol>
+  </svg>
+
+  <!-- Pip strip showing 6th-set vote progress. Hidden when no vote active.
+       JS toggles .visible and populates dots in renderSession. -->
+  <div id="pawPips" class="paw-pips" hidden></div>
 
   <!-- Header -->
   <header>
@@ -105,12 +120,12 @@
        deploy.bat â€” every deploy produces a unique URL the browser must
        fetch fresh, sidestepping HTTP cache TTLs that would otherwise serve
        stale JS for up to 10 minutes after a deploy. -->
-  <script type="module" src="js/app.js?v=2026-04-29T21:56:46Z"></script>
+  <script type="module" src="js/app.js?v=2026-04-30T16:02:25Z"></script>
 
   <!-- Build timestamp also inlined here so the splash's "updated" line is
        guaranteed fresh per deploy without depending on version.js (which
        ES-module imports inside app.js can't easily cache-bust). -->
-  <script>window.FUBZ_BUILD_TIME = '2026-04-29T21:56:46Z';</script>
+  <script>window.FUBZ_BUILD_TIME = '2026-04-30T16:02:25Z';</script>
 
   <!-- Service Worker Registration + Auto-update listener -->
   <script>

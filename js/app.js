@@ -1,7 +1,7 @@
 // Main app module — routing and state
 import { initAuth, onAuthChange, renderAuth, signOut, getUser } from './auth.js';
 import { renderGroups, clearGroupsCache } from './group.js';
-import { startSession, cleanupSession } from './session.js';
+import { startSession, cleanupSession, setupPawListeners } from './session.js';
 import { supabase } from './supabase.js';
 import { showView, toast, EXERCISE_NAMES } from './utils.js';
 
@@ -130,16 +130,27 @@ async function healthCheck() {
 }
 setInterval(healthCheck, WATCHDOG_INTERVAL_MS);
 
-// Stall detector — runs on every focus/visibility-resume. If the watchdog
-// hasn't ticked recently (background throttling, OS suspend, laptop lid),
-// the in-memory state is almost certainly stale: JWT may be expired, realtime
-// dead, optimistic updates lost. Force a clean reload.
+// Stall detector — runs on every focus/visibility-resume. Two checks:
+//   1. Watchdog hasn't ticked in WATCHDOG_STALL_MS — system slept, force reload.
+//   2. Any realtime channel is in errored/closed state — websocket died
+//      during iOS suspension (very common for short backgrounding events
+//      like a 30s text reply). Reconnect by reloading.
+// Check #2 catches the "buttons unresponsive after re-entry" symptom: the
+// websocket is dead but the UI doesn't know it, so optimistic updates fail
+// silently. A fresh reload re-establishes everything.
 function checkForStall() {
   if (!getUser()) return;
   if (document.visibilityState === 'hidden') return;
   const idle = Date.now() - lastWatchdogTickAt;
   if (idle > WATCHDOG_STALL_MS) {
     console.warn('[FubzLifts] Watchdog stall detected — reloading after', Math.round(idle / 1000), 's idle');
+    invisibleReload();
+    return;
+  }
+  const channels = supabase.getChannels();
+  const broken = channels.find(c => c.state === 'errored' || c.state === 'closed');
+  if (broken) {
+    console.warn('[FubzLifts] Stall check: realtime channel broken on resume', broken.topic, broken.state);
     invisibleReload();
   }
 }
@@ -391,6 +402,9 @@ function drawProfile(container, user, weights) {
 function showNav() {
   document.getElementById('navBar').style.display = 'flex';
   document.getElementById('headerRight').style.display = 'flex';
+  // Header is now in the DOM and visible — wire up the paw long-press +
+  // click listeners. The function is idempotent, safe to call repeatedly.
+  setupPawListeners();
 }
 
 function hideNav() {

@@ -155,12 +155,203 @@ async function claimHost() {
   toast('You are now the host');
 }
 
-/** Get max sets for an exercise, respecting lobby DL override */
-function getMaxSets(exercise) {
-  if (exercise === 'deadlift' && activeSession?.lobby_state?.dl_sets) {
-    return activeSession.lobby_state.dl_sets;
+// ─── Paw vote (secret 6th-set vote) ────────────────────────────
+// State lives on activeSession.lobby_state:
+//   - paw_vote: { voters: [uid, uid, ...], exercise: 'squat' }
+//   - extra_sets: { squat: 1, bench: 0, ... }
+// Any member can initiate by tapping the paw (revealed via long-pressing
+// the header). Other members see the paw button automatically while a vote
+// is active. Once every member in turn_order has voted, the bonus set is
+// committed and the splash plays for everyone via the realtime handler.
+
+/** Initiate or cast a vote for the current exercise's bonus set. */
+async function castPawVote() {
+  if (!activeSession || activeSession.status !== 'active') return;
+  const user = getUser();
+  const exercise = activeSession.current_exercise;
+  if (!exercise) return;
+
+  const lobbyState = JSON.parse(JSON.stringify(activeSession.lobby_state || { members: {} }));
+  let pawVote = lobbyState.paw_vote;
+
+  // If vote was started for a different exercise (e.g. exercise changed
+  // mid-vote), reset and start fresh for the current one.
+  if (!pawVote || pawVote.exercise !== exercise) {
+    pawVote = { voters: [user.id], exercise };
+  } else {
+    // Already voting for this exercise — add me if I'm not already in.
+    if (!pawVote.voters.includes(user.id)) {
+      pawVote.voters.push(user.id);
+    }
   }
-  return DEFAULT_SETS[exercise];
+
+  // Unanimous? Apply the bonus set and clear the vote in the same write.
+  const allVoted = activeSession.turn_order.every(uid => pawVote.voters.includes(uid));
+  if (allVoted) {
+    const extra = { ...(lobbyState.extra_sets || {}) };
+    extra[exercise] = (extra[exercise] || 0) + 1;
+    lobbyState.extra_sets = extra;
+    delete lobbyState.paw_vote;
+  } else {
+    lobbyState.paw_vote = pawVote;
+  }
+  lobbyState.last_activity_at = new Date().toISOString();
+
+  const { error } = await supabase.from('sessions').update({
+    lobby_state: lobbyState,
+  }).eq('id', activeSession.id);
+  if (error) {
+    console.error('[FubzLifts] castPawVote error:', error);
+    toast('Failed to vote — check connection');
+  }
+}
+
+// Local-only "is the paw revealed on my screen" flag. Resets on session end.
+// Other members don't see my reveal — but once *I* tap the paw and start a
+// vote, lobby_state.paw_vote becomes truthy and updatePawVoteUI auto-shows
+// the button for everyone.
+let pawRevealed = false;
+
+/** One-time setup: tap on the workout banner to reveal the secret paw,
+ *  tap the paw to vote. Both are delegated from document so they survive
+ *  renderSession's container.innerHTML rebuilds. Idempotent. */
+export function setupPawListeners() {
+  if (document._pawListenersAttached) return;
+  document._pawListenersAttached = true;
+
+  document.addEventListener('click', (e) => {
+    if (!activeSession || activeSession.status !== 'active') return;
+    // Paw button click → cast/initiate vote. Check this BEFORE the banner
+    // check, because the paw is a child of the banner.
+    if (e.target.closest('.paw-button')) {
+      castPawVote();
+      return;
+    }
+    // Banner click → reveal the secret paw locally.
+    if (e.target.closest('.exercise-banner') && !pawRevealed) {
+      pawRevealed = true;
+      updatePawVoteUI();
+    }
+  });
+}
+
+/** Sync the paw button visibility/state and the pip indicator with the
+ *  current lobby_state.paw_vote. Called from renderSession and from the
+ *  realtime sessions handler. */
+function updatePawVoteUI() {
+  const pawBtn = document.getElementById('pawButton');
+  const pips = document.getElementById('pawPips');
+  if (!pawBtn || !pips) return;
+
+  const inActive = activeSession?.status === 'active';
+  let pawVote = inActive ? activeSession.lobby_state?.paw_vote : null;
+  // Treat votes for a different (already-finished) exercise as not active.
+  // The stale row stays in DB until someone re-votes, but UI ignores it.
+  if (pawVote && pawVote.exercise !== activeSession?.current_exercise) {
+    pawVote = null;
+  }
+  const me = getUser();
+  const iVoted = !!(pawVote && me && pawVote.voters?.includes(me.id));
+
+  if (inActive && (pawVote || pawRevealed)) {
+    pawBtn.hidden = false;
+    pawBtn.classList.add('revealed');
+    pawBtn.classList.toggle('voted', iVoted);
+    pawBtn.classList.toggle('pulse', !!pawVote && !iVoted);
+  } else {
+    pawBtn.hidden = true;
+    pawBtn.classList.remove('revealed', 'voted', 'pulse');
+  }
+
+  if (pawVote && activeSession?.turn_order) {
+    pips.hidden = false;
+    pips.innerHTML = activeSession.turn_order.map(uid => {
+      const voted = pawVote.voters.includes(uid);
+      return `<div class="paw-pip ${voted ? 'voted' : ''}"></div>`;
+    }).join('');
+  } else {
+    pips.hidden = true;
+    pips.innerHTML = '';
+  }
+}
+
+/** Show the TOMCATZ MEOW celebration splash — same retro RPG dialog box
+ *  pattern as showExerciseSplash, but with the bonus-set chant. */
+function showTomcatzSplash(onDone) {
+  const message = 'TOMCATZ MEOW! ONE TWO THREE MEOW!!!';
+  const splash = document.createElement('div');
+  splash.className = 'splash-overlay';
+  splash.innerHTML = `
+    <style>
+      @keyframes catBounce {
+        0%, 100% { transform: translateY(0); }
+        25% { transform: translateY(-6px) rotate(-3deg); }
+        50% { transform: translateY(-2px); }
+        75% { transform: translateY(-8px) rotate(3deg); }
+      }
+      .splash-cat {
+        width: 72px; height: 72px; border-radius: 50%; flex-shrink: 0;
+        animation: catBounce 0.9s ease-in-out infinite;
+      }
+      .splash-bubble {
+        background: var(--card-bg); border: 2px solid var(--orange);
+        border-radius: 14px 14px 14px 2px; padding: 12px 16px;
+        font-family: monospace; font-size: 17px; color: var(--orange);
+        min-height: 1.4em; letter-spacing: 1px;
+      }
+      .splash-bubble .cursor {
+        display: inline-block; width: 2px; height: 1em;
+        background: var(--orange); margin-left: 2px;
+        animation: blink 0.5s step-end infinite;
+        vertical-align: text-bottom;
+      }
+      @keyframes blink { 50% { opacity: 0; } }
+    </style>
+    <div class="splash-content">
+      <h2 style="color:#E74C3C">+1 BONUS SET!</h2>
+      <div style="display:flex;align-items:flex-start;justify-content:center;gap:14px;margin:24px 0">
+        <img src="icons/icon-192.png" alt="" class="splash-cat" />
+        <div class="splash-bubble"><span id="splashText"></span><span class="cursor"></span></div>
+      </div>
+      <p class="muted" style="font-size:12px;margin-top:14px">Tap anywhere to continue</p>
+    </div>
+  `;
+  document.body.appendChild(splash);
+
+  const textEl = splash.querySelector('#splashText');
+  let charIdx = 0;
+  const typeInterval = setInterval(() => {
+    if (charIdx < message.length) {
+      textEl.textContent += message[charIdx];
+      charIdx++;
+    } else {
+      clearInterval(typeInterval);
+    }
+  }, 55);
+
+  let dismissed = false;
+  const dismiss = () => {
+    if (dismissed) return;
+    dismissed = true;
+    clearInterval(typeInterval);
+    clearTimeout(autoTimer);
+    splash.remove();
+    if (onDone) onDone();
+  };
+  splash.addEventListener('click', dismiss);
+  const autoTimer = setTimeout(dismiss, 8000);
+}
+
+
+function getMaxSets(exercise) {
+  let base;
+  if (exercise === 'deadlift' && activeSession?.lobby_state?.dl_sets) {
+    base = activeSession.lobby_state.dl_sets;
+  } else {
+    base = DEFAULT_SETS[exercise];
+  }
+  const bonus = activeSession?.lobby_state?.extra_sets?.[exercise] || 0;
+  return base + bonus;
 }
 
 /** Check if an exercise uses simultaneous mode (all lift at once) */
@@ -348,7 +539,13 @@ function setupRealtimeChannel(container) {
       const user = getUser();
       const wasInTurnOrder = activeSession.turn_order?.includes(user.id);
       const prevStatus = activeSession.status;
+      // Snapshot paw-vote state before swapping in the new session row, so
+      // the active-status branch can detect "vote just completed" and fire
+      // the TOMCATZ splash for everyone.
+      const prevExtraSets = JSON.stringify(activeSession.lobby_state?.extra_sets || {});
       activeSession = payload.new;
+      const newExtraSets = JSON.stringify(activeSession.lobby_state?.extra_sets || {});
+      const extraSetsGrew = prevExtraSets !== newExtraSets;
 
       // I was kicked — host removed me from turn_order. Bounce home.
       if (wasInTurnOrder && !activeSession.turn_order?.includes(user.id)) {
@@ -374,6 +571,10 @@ function setupRealtimeChannel(container) {
           const completedExercise = lastExercise;
           lastExercise = newExercise;
           showExerciseSplash(completedExercise, () => renderSession(container));
+        } else if (extraSetsGrew) {
+          // The paw vote just unanimously passed — everyone gets the splash.
+          renderSession(container); // sync the new set count first
+          showTomcatzSplash();
         } else {
           lastExercise = newExercise;
           renderSession(container);
@@ -1164,21 +1365,44 @@ async function cancelSession() {
 
 // ─── ACTIVE SESSION ──────────────────────────────────────
 
+// Wall-clock anchor for the timer tick. Each tick increments timers[uid] by
+// the *actual* seconds elapsed since the last tick — not by a fixed +1. This
+// way, when iOS pauses the JS context (app backgrounded), the timers stay
+// accurate: on resume, the next tick computes the real elapsed time and
+// jumps the values forward, instead of looking like the rest timer "froze"
+// during the background period.
+let lastTickAt = 0;
+
 /** Timer tick — increment rest timers for everyone except the active person */
 function startTimerTick(container) {
   clearInterval(timerInterval);
-  timerInterval = setInterval(() => {
-    if (!activeSession || activeSession.status !== 'active') return;
-    const simultaneous = isSimultaneous(activeSession.current_exercise);
-    const activeTurnUserId = activeSession.turn_order[activeSession.current_turn_index];
-    activeSession.turn_order.forEach(uid => {
-      if (simultaneous || uid !== activeTurnUserId) {
-        timers[uid] = (timers[uid] || 0) + 1;
-      }
-    });
-    updateTimerDisplay();
-  }, 1000);
+  lastTickAt = Date.now();
+  timerInterval = setInterval(advanceTimers, 1000);
 }
+
+function advanceTimers() {
+  if (!activeSession || activeSession.status !== 'active') return;
+  const now = Date.now();
+  const elapsedSec = Math.max(0, Math.round((now - lastTickAt) / 1000));
+  if (elapsedSec === 0) return;
+  lastTickAt = now;
+  const simultaneous = isSimultaneous(activeSession.current_exercise);
+  const activeTurnUserId = activeSession.turn_order[activeSession.current_turn_index];
+  activeSession.turn_order.forEach(uid => {
+    if (simultaneous || uid !== activeTurnUserId) {
+      timers[uid] = (timers[uid] || 0) + elapsedSec;
+    }
+  });
+  updateTimerDisplay();
+}
+
+// Force a catch-up tick the moment the page becomes visible again. setInterval
+// might take up to a second to fire after iOS resume, but this fires
+// synchronously on visibility resume so the timer jump is imperceptible.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') advanceTimers();
+});
+window.addEventListener('focus', advanceTimers);
 
 /** Compute the status label for a timer row (e.g. "UP NEXT", "resting", "ready"). */
 function timerStatusLabel(uid) {
@@ -1420,6 +1644,9 @@ async function processProgression() {
 function renderSession(container) {
   if (!activeSession || activeSession.status !== 'active') return;
 
+  // Sync the paw vote indicator with the latest session state on every render.
+  updatePawVoteUI();
+
   const user = getUser();
   const exercise = activeSession.current_exercise;
   const exerciseName = EXERCISE_NAMES[exercise];
@@ -1440,10 +1667,16 @@ function renderSession(container) {
   const mySetsDone = simultaneous && activeLogs.length >= maxSets;
 
   container.innerHTML = `
-    <div class="exercise-banner">
+    <div class="exercise-banner" id="exerciseBanner">
       <div class="exercise-meta">Workout ${activeSession.workout_type} · ${exercises.indexOf(exercise) + 1}/${exercises.length}</div>
       <div class="exercise-name">${exerciseName}</div>
       <div class="exercise-meta">${maxSets} × 5 reps</div>
+      <!-- Secret paw button. Hidden by default; revealed when the user taps
+           the banner anywhere (via the click delegation in setupPawListeners),
+           or auto-revealed when a vote is in progress for everyone. -->
+      <button class="paw-button" id="pawButton" aria-label="Vote for 6th set" hidden>
+        <svg><use href="#icon-paw"/></svg>
+      </button>
     </div>
 
     <div class="turn-indicator ${(isMyTurn && !mySetsDone) ? 'your-turn pulsing' : ''}">
@@ -1832,6 +2065,9 @@ export function cleanupSession() {
   // Reset host's manage-mode toggle so it doesn't carry over into the next
   // session view (especially relevant if the user lost host status).
   document.body.classList.remove('kick-managing');
+  // Reset paw vote local state and hide the indicator/button.
+  pawRevealed = false;
+  updatePawVoteUI();
   // Drop the groups-list cache so the home view doesn't briefly show a stale
   // "Workout in progress" indicator on the group we just left/ended/finished.
   clearGroupsCache();

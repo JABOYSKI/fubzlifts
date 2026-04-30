@@ -4,7 +4,7 @@ import { getUser } from './auth.js';
 import { getGroupMembers, clearGroupsCache } from './group.js';
 import {
   toast, formatTime, showView,
-  WORKOUTS, EXERCISE_NAMES, DEFAULT_SETS,
+  WORKOUTS, EXERCISE_NAMES, DEFAULT_SETS, pawBadge,
 } from './utils.js';
 
 let activeSession = null;
@@ -155,6 +155,40 @@ async function claimHost() {
   toast('You are now the host');
 }
 
+/** Bump the current user's paw_count after they initiated a successful
+ *  vote. Each client updates only their own users row — that side-steps
+ *  cross-user-update RLS and the "two clients race to bump the same row"
+ *  problem since only the initiator's client runs this. Best-effort: we
+ *  log on failure (e.g. RLS denial) but don't toast — the badge is a
+ *  cosmetic reward, not a critical path. */
+async function bumpMyPawCount() {
+  const user = getUser();
+  if (!user) return;
+  try {
+    const { data: row } = await supabase
+      .from('users')
+      .select('paw_count')
+      .eq('id', user.id)
+      .single();
+    const next = (row?.paw_count || 0) + 1;
+    const { error } = await supabase
+      .from('users')
+      .update({ paw_count: next })
+      .eq('id', user.id);
+    if (error) {
+      console.error('[FubzLifts] paw_count bump failed:', error);
+      return;
+    }
+    // Update the in-memory user so the header alias re-renders with badge
+    // without waiting for a full reload.
+    user.paw_count = next;
+    const headerAlias = document.getElementById('headerAlias');
+    if (headerAlias) headerAlias.innerHTML = esc(user.alias) + pawBadge(next);
+  } catch (e) {
+    console.error('[FubzLifts] paw_count bump exception:', e);
+  }
+}
+
 // ─── Paw vote (secret 6th-set vote) ────────────────────────────
 // State lives on activeSession.lobby_state:
 //   - paw_vote: { voters: [uid, uid, ...], exercise: 'squat' }
@@ -247,8 +281,7 @@ export function setupPawListeners() {
  *  what keeps re-renders from re-animating the reveal. */
 function updatePawVoteUI() {
   const pawBtn = document.getElementById('pawButton');
-  const pips = document.getElementById('pawPips');
-  if (!pips) return;
+  const pips = document.getElementById('pawPipsInline');
 
   const inActive = activeSession?.status === 'active';
   let pawVote = inActive ? activeSession.lobby_state?.paw_vote : null;
@@ -265,15 +298,17 @@ function updatePawVoteUI() {
     pawBtn.classList.toggle('voted', iVoted);
   }
 
-  if (pawVote && activeSession?.turn_order) {
-    pips.hidden = false;
-    pips.innerHTML = activeSession.turn_order.map(uid => {
-      const voted = pawVote.voters.includes(uid);
-      return `<div class="paw-pip ${voted ? 'voted' : ''}"></div>`;
-    }).join('');
-  } else {
-    pips.hidden = true;
-    pips.innerHTML = '';
+  if (pips) {
+    if (pawVote && activeSession?.turn_order) {
+      pips.hidden = false;
+      pips.innerHTML = activeSession.turn_order.map(uid => {
+        const voted = pawVote.voters.includes(uid);
+        return `<div class="paw-pip ${voted ? 'voted' : ''}"></div>`;
+      }).join('');
+    } else {
+      pips.hidden = true;
+      pips.innerHTML = '';
+    }
   }
 }
 
@@ -545,9 +580,19 @@ function setupRealtimeChannel(container) {
       // the active-status branch can detect "vote just completed" and fire
       // the TOMCATZ splash for everyone.
       const prevExtraSets = JSON.stringify(activeSession.lobby_state?.extra_sets || {});
+      const prevPawVote = activeSession.lobby_state?.paw_vote;
       activeSession = payload.new;
       const newExtraSets = JSON.stringify(activeSession.lobby_state?.extra_sets || {});
       const extraSetsGrew = prevExtraSets !== newExtraSets;
+      // If extra_sets grew AND there was a paw_vote that's now gone, this
+      // realtime payload is the "vote just unanimously passed" signal. The
+      // initiator was voters[0] of the prior paw_vote; if that's me, bump
+      // my own paw_count (each client only updates their own users row,
+      // RLS-friendly and avoids races since only the initiator runs this).
+      if (extraSetsGrew && prevPawVote && !activeSession.lobby_state?.paw_vote) {
+        const initiatorId = prevPawVote.voters?.[0];
+        if (initiatorId === user.id) bumpMyPawCount();
+      }
 
       // I was kicked — host removed me from turn_order. Bounce home.
       if (wasInTurnOrder && !activeSession.turn_order?.includes(user.id)) {
@@ -664,7 +709,7 @@ function renderLobby(container) {
   const allMembers = activeSession.turn_order.map(uid => {
     const member = sessionMembers.find(m => m.id === uid);
     const vote = lobbyState.members?.[uid] || {};
-    return { uid, alias: member?.alias || 'Unknown', ...vote };
+    return { uid, alias: member?.alias || 'Unknown', paw_count: member?.paw_count || 0, ...vote };
   });
 
   const readyCount = allMembers.filter(m => m.ready).length;
@@ -751,7 +796,7 @@ function renderMemberCards(allMembers, adminId) {
       <div class="card-row">
         <div class="card-info">
           <div class="card-title lobby-member-name">
-            ${esc(m.alias)}
+            ${esc(m.alias)}${pawBadge(m.paw_count)}
             ${m.uid === adminId ? '<span class="muted" style="font-size:11px"> (host)</span>' : ''}
           </div>
           <div class="card-subtitle muted lobby-member-vote">
@@ -804,7 +849,7 @@ function patchMemberCards(container, allMembers, adminId) {
 
     const nameEl = card.querySelector('.lobby-member-name');
     if (nameEl) {
-      const newName = `${esc(m.alias)}${m.uid === adminId ? '<span class="muted" style="font-size:11px"> (host)</span>' : ''}`;
+      const newName = `${esc(m.alias)}${pawBadge(m.paw_count)}${m.uid === adminId ? '<span class="muted" style="font-size:11px"> (host)</span>' : ''}`;
       if (nameEl.innerHTML !== newName) nameEl.innerHTML = newName;
     }
 
@@ -1679,6 +1724,13 @@ function renderSession(container) {
   const shouldRevealPaw = !!(isPawVoteForExercise || pawRevealed);
   const iVotedPaw = !!(isPawVoteForExercise && pawVoteState.voters?.includes(user.id));
   const pawCls = `paw-button${shouldRevealPaw ? ' revealed' : ''}${iVotedPaw ? ' voted' : ''}`;
+  // Pips render inline inside the banner, only when a vote's actually live.
+  const pipsHTML = isPawVoteForExercise
+    ? activeSession.turn_order.map(uid => {
+        const voted = pawVoteState.voters?.includes(uid);
+        return `<div class="paw-pip ${voted ? 'voted' : ''}"></div>`;
+      }).join('')
+    : '';
 
   container.innerHTML = `
     <div class="exercise-banner" id="exerciseBanner">
@@ -1688,6 +1740,7 @@ function renderSession(container) {
       <button class="${pawCls}" id="pawButton" aria-label="Vote for 6th set">
         <svg><use href="#icon-paw"/></svg>
       </button>
+      <div class="paw-pips-inline" id="pawPipsInline" ${pipsHTML ? '' : 'hidden'}>${pipsHTML}</div>
     </div>
 
     <div class="turn-indicator ${(isMyTurn && !mySetsDone) ? 'your-turn pulsing' : ''}">
@@ -1740,7 +1793,7 @@ function renderSession(container) {
           const isHost = uid === adminId;
           return `
             <div class="timer-row ${isActive ? 'active' : ''}">
-              <div class="timer-alias">${esc(alias)}${isHost ? '<span class="muted" style="font-size:10px;font-weight:400"> (host)</span>' : ''}</div>
+              <div class="timer-alias">${esc(alias)}${pawBadge(member?.paw_count)}${isHost ? '<span class="muted" style="font-size:10px;font-weight:400"> (host)</span>' : ''}</div>
               <div class="timer-bar">
                 <div class="timer-bar-fill" data-uid="${uid}" style="width:${Math.min(t / 300, 1) * 100}%"></div>
               </div>
@@ -1770,7 +1823,7 @@ function renderSession(container) {
           <div class="card" style="margin-bottom:6px">
             <div class="card-row">
               <div class="card-info">
-                <div class="card-title">${esc(alias)}${isHost ? '<span class="muted" style="font-size:11px;font-weight:400"> (host)</span>' : ''} <span class="muted">${mw} lbs</span></div>
+                <div class="card-title">${esc(alias)}${pawBadge(member?.paw_count)}${isHost ? '<span class="muted" style="font-size:11px;font-weight:400"> (host)</span>' : ''} <span class="muted">${mw} lbs</span></div>
               </div>
               <div style="display:flex;align-items:center;gap:8px">
                 <div class="set-dots" style="margin:0">

@@ -1,5 +1,5 @@
 ﻿// FubzLifts Service Worker â€” cache-first with auto-update notification
-const CACHE = 'fubzlifts-2026-04-30T17:37:10Z';
+const CACHE = 'fubzlifts-2026-04-30T20:48:54Z';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -43,7 +43,7 @@ self.addEventListener('activate', event => {
 });
 
 // In dev (localhost), deploy.bat never runs, so CACHE stays at the literal
-// 'fubzlifts-2026-04-30T17:37:10Z' and the cache-first handler would pin a stale
+// 'fubzlifts-2026-04-30T20:48:54Z' and the cache-first handler would pin a stale
 // copy of any file forever â€” including a half-saved JS file with a syntax
 // error, which produces a permanently blank page. Bypass the SW entirely
 // on localhost (see IS_DEV check below) so dev edits show up on reload.

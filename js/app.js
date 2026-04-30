@@ -3,7 +3,7 @@ import { initAuth, onAuthChange, renderAuth, signOut, getUser } from './auth.js'
 import { renderGroups, clearGroupsCache } from './group.js';
 import { startSession, cleanupSession, setupPawListeners } from './session.js';
 import { supabase } from './supabase.js';
-import { showView, toast, EXERCISE_NAMES } from './utils.js';
+import { showView, toast, EXERCISE_NAMES, pawBadge } from './utils.js';
 
 let currentGroupRef = null;
 let currentPage = null;
@@ -227,7 +227,9 @@ function renderApp() {
   if (!user) return;
 
   dismissAuthScreen();
-  document.getElementById('headerAlias').textContent = user.alias;
+  // innerHTML so the paw badge SVG renders inline next to the alias.
+  // user.alias is sanitized via the same esc helper used elsewhere.
+  document.getElementById('headerAlias').innerHTML = esc(user.alias) + pawBadge(user.paw_count);
   showNav();
 
   // Check for saved resume state (from invisible reload)

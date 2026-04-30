@@ -53,11 +53,13 @@ export async function getMyGroups() {
   return groups;
 }
 
-/** Get group members with their aliases and weights */
+/** Get group members with their aliases and weights. Selecting users(*)
+ *  picks up any optional columns (e.g. paw_count if the schema migration
+ *  has been applied) without breaking when those columns don't exist. */
 export async function getGroupMembers(groupId) {
   const { data, error } = await supabase
     .from('group_members')
-    .select('user_id, is_admin, users(id, alias, avatar_url)')
+    .select('user_id, is_admin, users(*)')
     .eq('group_id', groupId);
   if (error) { toast(error.message); return []; }
   return (data || []).map(row => ({ ...row.users, is_admin: row.is_admin }));

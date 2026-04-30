@@ -104,3 +104,14 @@ export const DEFAULT_SETS = {
 
 /** Starting weight for new users */
 export const STARTING_WEIGHT = 45;
+
+/** Render a small paw-print badge next to a member's alias if they've ever
+ *  initiated a successful 6th-set vote. Awarded once per successful vote
+ *  (count tracked in users.paw_count). The badge appears next to their
+ *  name across all views — lobby member cards, session rest timers,
+ *  progress cards, and their own header alias. Returns empty string when
+ *  count is 0 so callers can blindly concat. */
+export function pawBadge(count) {
+  if (!count || count <= 0) return '';
+  return `<span class="paw-badge" title="${count} successful 6th-set vote${count !== 1 ? 's' : ''} initiated"><svg viewBox="0 0 100 100"><use href="#icon-paw"/></svg></span>`;
+}

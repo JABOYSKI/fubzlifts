@@ -642,21 +642,34 @@ body.kick-managing .session-kick-btn { display: inline-flex !important; }
   }
 }
 
-/* Vote progress pips at the very top of the screen, fixed above the header. */
-.paw-pips {
-  position: fixed;
-  top: 0; left: 0; right: 0;
-  z-index: 60;
+/* Paw badge — small dark-red paw next to the alias of any member who's
+   ever initiated a successful 6th-set vote. Permanent / global to their
+   profile (lives in users.paw_count). */
+.paw-badge {
+  display: inline-flex;
+  width: 13px;
+  height: 13px;
+  margin-left: 5px;
+  vertical-align: -2px;
+  color: #8B0000;
+  flex-shrink: 0;
+}
+.paw-badge svg {
+  width: 100%;
+  height: 100%;
+  fill: currentColor;
+  filter: drop-shadow(0 0 2px rgba(139, 0, 0, 0.4));
+}
+
+/* Vote progress pips render inline inside the .exercise-banner — only
+   visible while a vote is active. Sits below the paw button so the voting
+   flow reads top-to-bottom: tap paw → see pips fill in. */
+.paw-pips-inline {
   display: flex;
   justify-content: center;
   gap: 8px;
-  padding: calc(env(safe-area-inset-top, 0) + 5px) 16px 5px;
-  background: rgba(35, 47, 62, 0.85);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  pointer-events: none;
+  margin-top: 10px;
 }
-.paw-pips[hidden] { display: none; }
 .paw-pip {
   width: 9px;
   height: 9px;

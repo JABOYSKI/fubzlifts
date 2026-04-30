@@ -238,33 +238,31 @@ export function setupPawListeners() {
   });
 }
 
-/** Sync the paw button visibility/state and the pip indicator with the
- *  current lobby_state.paw_vote. Called from renderSession and from the
- *  realtime sessions handler. */
+/** Sync the paw button + pip indicator to current lobby_state.paw_vote.
+ *  Called for two reasons: dynamic state changes (banner tap toggles
+ *  pawRevealed; vote cast/completed) and re-renders (renderSession bakes
+ *  the right classes into the template, then we ensure they're consistent).
+ *  classList.toggle with the second arg is idempotent — if the class is
+ *  already in the desired state, no change, no transition fires. That's
+ *  what keeps re-renders from re-animating the reveal. */
 function updatePawVoteUI() {
   const pawBtn = document.getElementById('pawButton');
   const pips = document.getElementById('pawPips');
-  if (!pawBtn || !pips) return;
+  if (!pips) return;
 
   const inActive = activeSession?.status === 'active';
   let pawVote = inActive ? activeSession.lobby_state?.paw_vote : null;
   // Treat votes for a different (already-finished) exercise as not active.
-  // The stale row stays in DB until someone re-votes, but UI ignores it.
   if (pawVote && pawVote.exercise !== activeSession?.current_exercise) {
     pawVote = null;
   }
   const me = getUser();
   const iVoted = !!(pawVote && me && pawVote.voters?.includes(me.id));
+  const shouldReveal = inActive && !!(pawVote || pawRevealed);
 
-  if (inActive && (pawVote || pawRevealed)) {
-    pawBtn.hidden = false;
-    pawBtn.classList.add('revealed');
+  if (pawBtn) {
+    pawBtn.classList.toggle('revealed', shouldReveal);
     pawBtn.classList.toggle('voted', iVoted);
-    // .revealed already triggers the always-on ominous pulse via CSS;
-    // .voted overrides the animation back to a static darkened state.
-  } else {
-    pawBtn.hidden = true;
-    pawBtn.classList.remove('revealed', 'voted');
   }
 
   if (pawVote && activeSession?.turn_order) {
@@ -1670,15 +1668,24 @@ function renderSession(container) {
   const currentSetNum = Math.min(activeLogs.length + 1, maxSets);
   const mySetsDone = simultaneous && activeLogs.length >= maxSets;
 
+  // Bake the paw button's revealed/voted state directly into the rendered
+  // markup. Without this, every re-render of renderSession (which wipes the
+  // banner DOM via innerHTML) would create a fresh button in default state,
+  // and updatePawVoteUI re-adding .revealed would retrigger the slow reveal
+  // transition each time. Baking means the animation only plays on actual
+  // state transitions (banner tap, vote cast) — not on incidental re-renders.
+  const pawVoteState = activeSession.lobby_state?.paw_vote;
+  const isPawVoteForExercise = pawVoteState && pawVoteState.exercise === exercise;
+  const shouldRevealPaw = !!(isPawVoteForExercise || pawRevealed);
+  const iVotedPaw = !!(isPawVoteForExercise && pawVoteState.voters?.includes(user.id));
+  const pawCls = `paw-button${shouldRevealPaw ? ' revealed' : ''}${iVotedPaw ? ' voted' : ''}`;
+
   container.innerHTML = `
     <div class="exercise-banner" id="exerciseBanner">
       <div class="exercise-meta">Workout ${activeSession.workout_type} · ${exercises.indexOf(exercise) + 1}/${exercises.length}</div>
       <div class="exercise-name">${exerciseName}</div>
       <div class="exercise-meta">${maxSets} × 5 reps</div>
-      <!-- Secret paw button. Hidden by default; revealed when the user taps
-           the banner anywhere (via the click delegation in setupPawListeners),
-           or auto-revealed when a vote is in progress for everyone. -->
-      <button class="paw-button" id="pawButton" aria-label="Vote for 6th set" hidden>
+      <button class="${pawCls}" id="pawButton" aria-label="Vote for 6th set">
         <svg><use href="#icon-paw"/></svg>
       </button>
     </div>

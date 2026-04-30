@@ -257,10 +257,11 @@ function updatePawVoteUI() {
     pawBtn.hidden = false;
     pawBtn.classList.add('revealed');
     pawBtn.classList.toggle('voted', iVoted);
-    pawBtn.classList.toggle('pulse', !!pawVote && !iVoted);
+    // .revealed already triggers the always-on ominous pulse via CSS;
+    // .voted overrides the animation back to a static darkened state.
   } else {
     pawBtn.hidden = true;
-    pawBtn.classList.remove('revealed', 'voted', 'pulse');
+    pawBtn.classList.remove('revealed', 'voted');
   }
 
   if (pawVote && activeSession?.turn_order) {

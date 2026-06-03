@@ -9,12 +9,14 @@ const STATIC_ASSETS = [
   './js/group.js',
   './js/session.js',
   './js/supabase.js',
+  './js/companion.js',
   './js/utils.js',
   './js/version.js',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/favicon-32.png',
+  './assets/companion/cat-face-sq.jpg',
 ];
 
 const IS_DEV = self.location.hostname === 'localhost' || self.location.hostname === '127.0.0.1';

@@ -421,6 +421,9 @@ h3 { margin: 0 0 8px; font-size: 11px; font-weight: 600; color: var(--muted-colo
   display: flex; gap: 0; background: var(--header);
   border-top: 1px solid var(--border);
   position: fixed; bottom: 0; left: 0; right: 0; z-index: 50;
+  /* Extend into the iPhone home-indicator safe area so the nav background
+     fills it and tap targets sit above it. */
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 .nav-tab {
   flex: 1; padding: 10px 4px 8px; text-align: center;
@@ -432,7 +435,10 @@ h3 { margin: 0 0 8px; font-size: 11px; font-weight: 600; color: var(--muted-colo
 .nav-tab:hover { color: var(--text); }
 .nav-tab.active { color: var(--orange); }
 .nav-tab svg { width: 20px; height: 20px; }
-body { padding-bottom: 60px; }
+/* Reserve space so the fixed bottom nav (≈53px) plus the iPhone home-indicator
+   safe area never overlaps the last interactive controls (e.g. lobby host
+   controls / Start / Leave) — taps in that band would otherwise hit the nav. */
+body { padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
 
 /* ===== Animations (matched from Tasknari) ===== */
 

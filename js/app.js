@@ -2,17 +2,22 @@
 import { initAuth, onAuthChange, renderAuth, signOut, getUser } from './auth.js';
 import { renderGroups, clearGroupsCache } from './group.js';
 import { startSession, cleanupSession, setupPawListeners } from './session.js';
-import { supabase } from './supabase.js';
+import { supabase, withTimeout, TimeoutError } from './supabase.js';
 import { showView, toast, EXERCISE_NAMES, pawBadge } from './utils.js';
 
 let currentGroupRef = null;
 let currentPage = null;
 let activeGroupId = null; // track which group we're in a session for
 
-// ─── Invisible reload on tab resume ───────────────────────
-// Saves current page + session group, reloads from SW cache (instant),
-// restores position. Fixes all handler/token/realtime issues.
-let wasHidden = false;
+// ─── Recovery on tab resume ───────────────────────────────
+// When the tab is backgrounded we save resume state. On return we DON'T blindly
+// reload — that was the old behaviour and the #1 cause of the "random reload /
+// freeze" reports: every glance away (a notification, an OS gesture) flashed the
+// boot spinner and discarded in-progress state. Instead onResume() only recovers
+// when something is actually broken: a long sleep, a dead realtime channel, or a
+// hung/expired auth session. See onResume() below.
+let hiddenAt = 0;            // timestamp of the last hidden event (0 = never hidden)
+let resumeProbing = false;   // guard so overlapping resume events don't stack probes
 
 function saveResumeState() {
   if (getUser()) {
@@ -26,15 +31,16 @@ function saveResumeState() {
 // All recovery paths funnel through invisibleReload. Two layers of guard:
 //   1. MIN_RELOAD_INTERVAL_MS: no two reloads within 30s. Catches fast
 //      cascades (multiple triggers firing on the same event).
-//   2. MAX_RELOADS_PER_SESSION: cap at 2 reloads per tab session. Catches
+//   2. MAX_RELOADS_PER_SESSION: cap at 3 reloads per tab session. Catches
 //      slow loops (e.g., a stale SW reactivating on every load, or auth
-//      stuck in a bad cached state). Reset on first successful click —
-//      that's strong evidence the page is functional, so future reloads
-//      (overnight resume etc.) should work normally.
+//      stuck in a bad cached state). The budget is refilled after a healthy
+//      watchdog tick (valid session + all channels live) — strong evidence the
+//      page is functional — so legitimate future reloads aren't permanently
+//      blocked.
 // Counter and timestamp both live in sessionStorage so they survive the
 // reload itself but reset on tab close.
 const MIN_RELOAD_INTERVAL_MS = 30 * 1000;
-const MAX_RELOADS_PER_SESSION = 2;
+const MAX_RELOADS_PER_SESSION = 3;
 
 function invisibleReload() {
   const last = parseInt(sessionStorage.getItem('fubz_last_reload') || '0', 10);
@@ -56,38 +62,33 @@ function invisibleReload() {
   window.location.reload();
 }
 
-// First successful click ⇒ the page is functional ⇒ clear the reload
-// counter so legitimate future reloads (auth refresh, deploy detection,
-// stall recovery) aren't blocked.
-document.addEventListener('click', () => {
-  sessionStorage.removeItem('fubz_reload_count');
-}, { once: true, passive: true });
+// Exposed so session.js (and any other module on the critical path) can
+// trigger recovery when a supabase call times out — without introducing a
+// circular import.
+window.fubzInvisibleReload = invisibleReload;
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
-    wasHidden = true;
+    hiddenAt = Date.now();
     saveResumeState();
-  } else if (wasHidden) {
-    wasHidden = false;
-    invisibleReload();
+  } else {
+    onResume();
   }
 });
 
-// iOS Safari: pageshow fires when restoring from BFCache (app switcher)
+// iOS Safari: pageshow fires when restoring from BFCache (app switcher). A
+// persisted restore always severs the realtime socket, so probe regardless of
+// how long we were away.
 window.addEventListener('pageshow', (e) => {
   if (e.persisted) {
     saveResumeState();
-    invisibleReload();
+    onResume({ fromBFCache: true });
   }
 });
 
-// Fallback: window focus after being hidden (covers edge cases on iOS/Android)
-window.addEventListener('focus', () => {
-  if (wasHidden) {
-    wasHidden = false;
-    invisibleReload();
-  }
-});
+// Fallback: window focus (covers edge cases on iOS/Android where
+// visibilitychange is unreliable). onResume() self-gates on hidden duration.
+window.addEventListener('focus', () => onResume());
 
 // ─── Health watchdog ─────────────────────────────────────
 // Catches the case where someone keeps the tab in the foreground for an
@@ -107,12 +108,18 @@ let lastWatchdogTickAt = Date.now();
 const WATCHDOG_INTERVAL_MS = 2 * 60 * 1000;
 const WATCHDOG_STALL_MS = 5 * 60 * 1000; // missed ≥2 ticks ⇒ system slept
 
+// CRITICAL: don't bump lastWatchdogTickAt at the START of healthCheck —
+// if getSession() hangs forever (zombie websocket / stalled JWT refresh),
+// the timestamp would keep advancing on each interval fire and the stall
+// detector would never trip, leaving the user stuck. Tick AFTER the awaits
+// have actually returned successfully, so a hung await reads as a stall.
 async function healthCheck() {
-  lastWatchdogTickAt = Date.now();
-  if (!getUser()) return;
-  if (document.visibilityState === 'hidden') return; // resume path will catch it
+  if (!getUser()) { lastWatchdogTickAt = Date.now(); return; }
+  if (document.visibilityState === 'hidden') { lastWatchdogTickAt = Date.now(); return; }
   try {
-    const { data: { session }, error } = await supabase.auth.getSession();
+    const { data: { session }, error } = await withTimeout(
+      supabase.auth.getSession(), 5000, 'auth.getSession'
+    );
     if (error || !session) {
       console.warn('[FubzLifts] Health check: auth session missing, reloading');
       invisibleReload();
@@ -123,41 +130,95 @@ async function healthCheck() {
     if (broken) {
       console.warn('[FubzLifts] Health check: realtime channel broken', broken.topic, broken.state);
       invisibleReload();
+      return;
     }
+    // A clean tick (valid session + all channels healthy) is strong evidence the
+    // page is functional — refill the reload budget so a genuine future problem
+    // (overnight resume, deploy) can still recover even after earlier reloads.
+    sessionStorage.removeItem('fubz_reload_count');
+    lastWatchdogTickAt = Date.now();
   } catch (e) {
+    if (e instanceof TimeoutError) {
+      console.warn('[FubzLifts] Health check: getSession hung — reloading');
+      invisibleReload();
+      return;
+    }
     console.error('[FubzLifts] Health check failed:', e);
   }
 }
 setInterval(healthCheck, WATCHDOG_INTERVAL_MS);
 
-// Stall detector — runs on every focus/visibility-resume. Two checks:
-//   1. Watchdog hasn't ticked in WATCHDOG_STALL_MS — system slept, force reload.
-//   2. Any realtime channel is in errored/closed state — websocket died
-//      during iOS suspension (very common for short backgrounding events
-//      like a 30s text reply). Reconnect by reloading.
-// Check #2 catches the "buttons unresponsive after re-entry" symptom: the
-// websocket is dead but the UI doesn't know it, so optimistic updates fail
-// silently. A fresh reload re-establishes everything.
-function checkForStall() {
+// Resume recovery — the single decision point for "should returning to the tab
+// trigger a reload?" Called from the visibilitychange/pageshow/focus handlers
+// above. Guiding rule: NEVER reload just because the user came back; only reload
+// when we can show something is actually broken.
+//   1. If the watchdog hasn't ticked in WATCHDOG_STALL_MS, the system slept —
+//      reload (in-page state is stale and the socket is almost certainly dead).
+//   2. Otherwise ignore brief hides (a notification-shade pull, an OS prompt).
+//      Only probe after a meaningful hidden duration, or a BFCache restore.
+//   3. Probe: a dead/closed realtime channel, or a getSession() that fails or
+//      hangs, means the connection died during suspension → reload. A clean
+//      probe means the page is fine → do nothing (this kills the spurious
+//      "reloads every time I glance away" reloads).
+const MIN_HIDDEN_FOR_PROBE_MS = 60 * 1000;
+
+async function onResume(opts = {}) {
   if (!getUser()) return;
   if (document.visibilityState === 'hidden') return;
+
+  // 1. System slept long enough that the watchdog missed ≥2 ticks → full reload.
   const idle = Date.now() - lastWatchdogTickAt;
   if (idle > WATCHDOG_STALL_MS) {
-    console.warn('[FubzLifts] Watchdog stall detected — reloading after', Math.round(idle / 1000), 's idle');
+    console.warn('[FubzLifts] Resume: watchdog stalled', Math.round(idle / 1000) + 's — reloading');
     invisibleReload();
     return;
   }
-  const channels = supabase.getChannels();
-  const broken = channels.find(c => c.state === 'errored' || c.state === 'closed');
-  if (broken) {
-    console.warn('[FubzLifts] Stall check: realtime channel broken on resume', broken.topic, broken.state);
-    invisibleReload();
+
+  // 2. Soft re-sync on EVERY resume. The realtime socket may have missed events
+  //    while we were away — even a brief glance — and a full reload is overkill.
+  //    reconcileSession() re-fetches authoritative session state in place (no
+  //    spinner flash) and self-heals the "wrong turn / buttons stopped working
+  //    after I checked my phone" drift. This replaces the old reload-on-every-
+  //    resume: same consistency guarantee, none of the flashing. It self-guards
+  //    (no-op if not in a session, mid-set-log, or already running) and only
+  //    re-renders on an actual change.
+  window.fubzReconcileSession?.();
+
+  // 3. After a longer hide or a BFCache restore, also verify the transport: a
+  //    dead channel or a hung/failed getSession means reconcile can't succeed
+  //    anyway, so reload to fully re-establish auth + websocket.
+  if (resumeProbing) return;
+  const hiddenMs = hiddenAt ? Date.now() - hiddenAt : 0;
+  if (!opts.fromBFCache && hiddenMs < MIN_HIDDEN_FOR_PROBE_MS) return;
+
+  resumeProbing = true;
+  try {
+    const channels = supabase.getChannels();
+    const broken = channels.find(c => c.state === 'errored' || c.state === 'closed');
+    if (broken) {
+      console.warn('[FubzLifts] Resume probe: realtime channel broken', broken.topic, broken.state);
+      invisibleReload();
+      return;
+    }
+    const { data: { session }, error } = await withTimeout(
+      supabase.auth.getSession(), 5000, 'resume.getSession'
+    );
+    if (error || !session) {
+      console.warn('[FubzLifts] Resume probe: auth session gone — reloading');
+      invisibleReload();
+      return;
+    }
+  } catch (e) {
+    if (e instanceof TimeoutError) {
+      console.warn('[FubzLifts] Resume probe: getSession hung — reloading');
+      invisibleReload();
+    } else {
+      console.error('[FubzLifts] Resume probe error:', e);
+    }
+  } finally {
+    resumeProbing = false;
   }
 }
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') checkForStall();
-});
-window.addEventListener('focus', checkForStall);
 
 // ─── Init ────────────────────────────────────────────────
 
@@ -194,6 +255,11 @@ async function init() {
 }
 
 function showAuthScreen() {
+  // Hide the boot spinner up front. renderAuth() also hides it (via rAF), but
+  // doing it here guarantees the spinner never covers the auth screen even if
+  // renderAuth is delayed or throws — otherwise a boot-path auth fallback could
+  // surface behind a permanent spinner (the "timed out on open" symptom).
+  document.getElementById('bootSplash')?.classList.add('hide');
   document.querySelector('header').style.display = 'none';
   document.querySelector('.container').style.display = 'none';
   hideNav();

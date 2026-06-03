@@ -184,14 +184,18 @@ export async function deleteGroup(groupId) {
  *  Returns a promise resolving to a handle with `reload()`. */
 export async function renderGroups(container, onSelectGroup, onStartSession) {
   let groups = [];
+  let rendered = false; // never skip the FIRST render: sameGroupList([],[]) is
+                        // true, so a brand-new / zero-group user would otherwise
+                        // get a blank Groups page with no way to create or join.
 
   async function load() {
     const fresh = await getMyGroups();
     // Skip the re-render if data hasn't actually changed — most navigations
     // come back to identical state, and a no-op skip prevents the cache hit
-    // from causing a visible flash on revalidation.
-    if (sameGroupList(groups, fresh)) return;
+    // from causing a visible flash on revalidation. But always do the first render.
+    if (rendered && sameGroupList(groups, fresh)) return;
     groups = fresh;
+    rendered = true;
     render();
   }
 
@@ -577,6 +581,7 @@ export async function renderGroups(container, onSelectGroup, onStartSession) {
   if (cachedGroups) {
     groups = cachedGroups;
     render();
+    rendered = true;
     load(); // intentionally not awaited — silent background refresh
   } else {
     // First visit since sign-in: must await the fetch so the transition

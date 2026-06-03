@@ -1,5 +1,5 @@
 // Authentication module
-import { supabase } from './supabase.js';
+import { supabase, withTimeout, TimeoutError } from './supabase.js';
 import { toast, STARTING_WEIGHT } from './utils.js';
 import { BUILD_TIME as BUILD_TIME_FROM_FILE } from './version.js';
 
@@ -16,7 +16,14 @@ export function getUser() { return currentUser; }
 
 /** Initialize auth — check existing session */
 export async function initAuth() {
-  const { data: { session } } = await supabase.auth.getSession();
+  // getSession() revalidates a cached refresh token over the network and, after
+  // iOS suspension / a zombie socket, can hang forever (never resolves OR
+  // rejects). Unwrapped, that leaves the boot splash covering a dead page (the
+  // "spinner forever on open" bug). Wrap it so a hang throws TimeoutError, which
+  // init() in app.js catches and falls back to the auth screen.
+  const { data: { session } } = await withTimeout(
+    supabase.auth.getSession(), 8000, 'initAuth.getSession'
+  );
   if (session) {
     await loadProfile(session.user);
     return currentUser;
@@ -36,14 +43,32 @@ export function onAuthChange(callback) {
   });
 }
 
-/** Load user profile from public.users, with retry and fallback */
+/** Load user profile from public.users, with retry and fallback.
+ *  Every supabase call here is on the boot + sign-in critical path, so each is
+ *  timeout-guarded: a hung query on a degraded socket must not stall the whole
+ *  app (boot splash forever / submit button stuck on "Loading…"). On a timeout
+ *  we fall straight through to the auth-metadata last resort so the app still
+ *  boots with a usable (minimal) profile. */
 async function loadProfile(authUser) {
+  const alias = authUser.user_metadata?.alias || 'Lifter';
+
   for (let i = 0; i < 3; i++) {
-    const { data } = await supabase
-      .from('users')
-      .select('*')
-      .eq('id', authUser.id)
-      .single();
+    let data = null;
+    try {
+      const res = await withTimeout(
+        supabase.from('users').select('*').eq('id', authUser.id).single(),
+        6000, 'loadProfile.select'
+      );
+      data = res.data;
+    } catch (e) {
+      if (!(e instanceof TimeoutError)) throw e;
+      // Socket hung — retries and the upsert would hang too. Skip straight to
+      // the metadata last resort so the app boots instead of freezing.
+      console.warn('[FubzLifts] loadProfile select timed out — using auth metadata');
+      currentUser = { id: authUser.id, alias, avatar_url: null };
+      ensureProfileWeights(authUser.id).catch(() => {});
+      return currentUser;
+    }
     if (data) {
       currentUser = data;
       await ensureProfileWeights(data.id);
@@ -53,59 +78,94 @@ async function loadProfile(authUser) {
   }
 
   // Fallback: create profile client-side if trigger didn't fire
-  const alias = authUser.user_metadata?.alias || 'Lifter';
-  const { data: inserted } = await supabase
-    .from('users')
-    .upsert({ id: authUser.id, alias })
-    .select()
-    .single();
-  if (inserted) {
-    currentUser = inserted;
-    await ensureProfileWeights(inserted.id);
-    return inserted;
+  try {
+    const { data: inserted } = await withTimeout(
+      supabase.from('users').upsert({ id: authUser.id, alias }).select().single(),
+      6000, 'loadProfile.upsert'
+    );
+    if (inserted) {
+      currentUser = inserted;
+      await ensureProfileWeights(inserted.id);
+      return inserted;
+    }
+  } catch (e) {
+    if (!(e instanceof TimeoutError)) throw e;
+    // fall through to last resort
   }
 
   // Last resort: use auth metadata so the app still works
   console.warn('Could not load/create profile, using auth metadata');
   currentUser = { id: authUser.id, alias, avatar_url: null };
-  await ensureProfileWeights(authUser.id);
+  await ensureProfileWeights(authUser.id).catch(() => {});
   return currentUser;
 }
 
-/** Ensure profile_weights rows exist for a user (seeds defaults if missing) */
+/** Ensure profile_weights rows exist for a user (seeds defaults if missing).
+ *  Best-effort: this is awaited on the boot path, so a hung query is swallowed
+ *  (timeout → return) rather than allowed to block render. */
 async function ensureProfileWeights(userId) {
-  const { data } = await supabase
-    .from('profile_weights')
-    .select('exercise')
-    .eq('user_id', userId);
-  const existing = (data || []).map(r => r.exercise);
-  const exercises = ['squat', 'bench', 'ohp', 'row', 'deadlift'];
-  const missing = exercises.filter(e => !existing.includes(e));
-  if (missing.length > 0) {
-    await supabase.from('profile_weights').insert(
-      missing.map(exercise => ({
-        user_id: userId,
-        exercise,
-        weight_lbs: STARTING_WEIGHT,
-      }))
+  try {
+    const { data } = await withTimeout(
+      supabase.from('profile_weights').select('exercise').eq('user_id', userId),
+      6000, 'ensureProfileWeights.select'
     );
+    const existing = (data || []).map(r => r.exercise);
+    const exercises = ['squat', 'bench', 'ohp', 'row', 'deadlift'];
+    const missing = exercises.filter(e => !existing.includes(e));
+    if (missing.length > 0) {
+      await withTimeout(
+        supabase.from('profile_weights').insert(
+          missing.map(exercise => ({
+            user_id: userId,
+            exercise,
+            weight_lbs: STARTING_WEIGHT,
+          }))
+        ),
+        6000, 'ensureProfileWeights.insert'
+      );
+    }
+  } catch (e) {
+    if (e instanceof TimeoutError) {
+      console.warn('[FubzLifts] ensureProfileWeights timed out — skipping seed');
+      return;
+    }
+    throw e;
   }
 }
 
-/** Sign up with email + password — profile created by DB trigger */
+/** Sign up with email + password — profile created by DB trigger.
+ *  Timeout-guarded: if the GoTrue call hangs (zombie socket), return a normal
+ *  error so the submit handler re-enables the button instead of leaving it
+ *  stuck on "Loading…" forever. */
 export async function signUp(email, password, alias) {
-  const { data, error } = await supabase.auth.signUp({
-    email,
-    password,
-    options: { data: { alias } },
-  });
+  let error;
+  try {
+    const res = await withTimeout(
+      supabase.auth.signUp({ email, password, options: { data: { alias } } }),
+      12000, 'signUp'
+    );
+    error = res.error;
+  } catch (e) {
+    if (e instanceof TimeoutError) return { ok: false, msg: 'Connection timed out — try again.' };
+    return { ok: false, msg: 'Something went wrong — try again.' };
+  }
   if (error) return { ok: false, msg: error.message };
   return { ok: true };
 }
 
 /** Sign in with email + password */
 export async function signIn(email, password) {
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  let error;
+  try {
+    const res = await withTimeout(
+      supabase.auth.signInWithPassword({ email, password }),
+      12000, 'signIn'
+    );
+    error = res.error;
+  } catch (e) {
+    if (e instanceof TimeoutError) return { ok: false, msg: 'Connection timed out — try again.' };
+    return { ok: false, msg: 'Something went wrong — try again.' };
+  }
   if (error) {
     // Make Supabase error messages friendlier
     let msg = error.message;

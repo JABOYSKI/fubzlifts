@@ -1,0 +1,39 @@
+# ── Secrets — NEVER commit ────────────────────────────────
+# The xAI API key and any Supabase service key live here.
+.env
+tools/.env
+*.env.local
+
+# ── Generated companion clips ─────────────────────────────
+# Large video files. These live in Supabase Storage, not in git
+# (GitHub Pages would choke on them and the repo would bloat).
+companion/generated/
+
+# ── Companion dev scaffolding — local-only, never deploy ───
+# The runtime needs only js/companion.js + the poster
+# (assets/companion/cat-face-sq.jpg); clips are served from Supabase Storage.
+# Everything below is generation tooling, source art, prompt catalogs, and
+# local preview pages — no reason to publish it to the public v2 Pages branch.
+#
+# IMPORTANT: companion/*.json also ignores companion/clips-manifest.json on
+# purpose. The manifest points at local companion/generated/ paths that don't
+# deploy; keeping it OUT of the deploy means prod fetches it, 404s, and the
+# engine falls back to listing the Supabase `companion` bucket (the real source
+# in production). The file stays on disk for local dev — git just won't ship it.
+companion/*.json
+companion/*.csv
+companion/*.md
+companion/base/
+companion/charkles/
+assets/companion/*
+!assets/companion/cat-face-sq.jpg
+companion-mvp.html
+companion-app-mock.html
+.claude/workflows/
+
+# ── Node ──────────────────────────────────────────────────
+node_modules/
+
+# ── OS / editor cruft ─────────────────────────────────────
+.DS_Store
+Thumbs.db

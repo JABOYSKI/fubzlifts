@@ -1,11 +1,12 @@
 // Session flow module — the heart of FubzLifts
-import { supabase } from './supabase.js';
+import { supabase, withTimeout, TimeoutError } from './supabase.js';
 import { getUser } from './auth.js';
 import { getGroupMembers, clearGroupsCache } from './group.js';
 import {
   toast, formatTime, showView,
   WORKOUTS, EXERCISE_NAMES, DEFAULT_SETS, pawBadge,
 } from './utils.js';
+import { mountCompanion, unmountCompanion, triggerCompanion } from './companion.js';
 
 let activeSession = null;
 let sessionMembers = []; // { id, alias, avatar_url, is_admin }
@@ -15,6 +16,14 @@ let timers = {};
 let timerInterval = null;
 let realtimeChannel = null;
 let onSessionEnd = null;
+// Reliability backstop: realtime postgres_changes is lossy (a missed event
+// during a websocket nap is never re-delivered), and the app otherwise only
+// reads authoritative session state on entry / full reload. reconcileSession()
+// re-fetches the truth without a reload; reconcileInterval runs it periodically
+// while subscribed, and `reconciling` guards against overlapping runs.
+let reconcileInterval = null;
+let reconciling = false;
+let hasSubscribedOnce = false; // so the SUBSCRIBED catch-up only fires on REconnect
 
 let groupOwnerId = null; // the group's actual owner
 let lastExercise = null; // track exercise for splash detection
@@ -418,19 +427,18 @@ export async function startSession(groupId, container, onEnd) {
       session_id: activeSession.id,
       user_id: user.id,
     });
-    // Add to turn order if not present
+    // Add to turn order if not present — merge-safe so a joiner can't clobber the
+    // host's simultaneous/dl_sets settings (or another concurrent joiner) by
+    // writing a whole lobby_state built from a stale snapshot.
     if (!activeSession.turn_order.includes(user.id)) {
-      const newOrder = [...activeSession.turn_order, user.id];
-      const lobbyState = activeSession.lobby_state || { members: {} };
-      if (activeSession.status === 'lobby' && !lobbyState.members[user.id]) {
-        lobbyState.members[user.id] = { workout_vote: 'A', ready: false };
-      }
-      await supabase.from('sessions').update({
-        turn_order: newOrder,
-        lobby_state: lobbyState,
-      }).eq('id', activeSession.id);
-      activeSession.turn_order = newOrder;
-      activeSession.lobby_state = lobbyState;
+      await mergeLobbyState((ls, fresh) => {
+        const order = fresh.turn_order || [];
+        const newOrder = order.includes(user.id) ? order : [...order, user.id];
+        if (fresh.status === 'lobby' && !ls.members[user.id]) {
+          ls.members[user.id] = { workout_vote: 'A', ready: false };
+        }
+        return { turn_order: newOrder };
+      });
     }
   } else {
     // Create new lobby session
@@ -529,10 +537,152 @@ async function loadSessionState(container) {
   renderSession(container);
 }
 
+/** Re-fetch authoritative session state (the sessions row + this run's set_logs)
+ *  and reconcile it into local state WITHOUT a page reload. This is the safety
+ *  net that makes correctness independent of receiving every realtime event:
+ *  a missed turn-advance or set_logs INSERT (websocket nap, brief drop) self-
+ *  heals here within seconds instead of wedging the session until a manual
+ *  reload. Best-effort and timeout-guarded — on failure it just leaves state
+ *  as-is and the next tick/resume retries. Re-renders only when something
+ *  actually changed, so the periodic backstop doesn't churn the DOM. */
+export async function reconcileSession() {
+  if (!activeSession || reconciling) return;
+  // Don't yank state out from under an in-flight set log — let it finish; the
+  // INSERT echo (or the next reconcile tick) will pick up the result.
+  if (logSetInFlight) return;
+  const sid = activeSession.id;
+  const container = lobbyContainer;
+  reconciling = true;
+  try {
+    const [sessRes, logRes] = await Promise.all([
+      withTimeout(supabase.from('sessions').select('*').eq('id', sid).single(), 6000, 'reconcile.session'),
+      withTimeout(
+        supabase.from('set_logs').select('*')
+          .eq('session_id', sid)
+          .gte('logged_at', activeSession.started_at)
+          .order('logged_at', { ascending: true }),
+        6000, 'reconcile.logs'
+      ),
+    ]);
+    // Session changed/ended underneath us while awaiting — abandon this pass.
+    if (!activeSession || activeSession.id !== sid) return;
+    const fresh = sessRes.data;
+    if (!fresh) return;
+
+    const me = getUser().id;
+    // Kicked while away — mirror the realtime kick handler and bounce home.
+    if (Array.isArray(fresh.turn_order) && !fresh.turn_order.includes(me)
+        && Array.isArray(activeSession.turn_order) && activeSession.turn_order.includes(me)) {
+      clearInterval(timerInterval);
+      toast('You were removed from the session by the host');
+      const cb = onSessionEnd;
+      cleanupSession();
+      if (cb) cb();
+      return;
+    }
+
+    const prevStatus = activeSession.status;
+    const prevExercise = activeSession.current_exercise;
+    const prevIdx = activeSession.current_turn_index;
+    const prevOrder = (activeSession.turn_order || []).join(',');
+    const prevLogCount = setLogs.length;
+
+    activeSession = fresh;
+    setLogs = logRes.data || [];
+    fresh.turn_order?.forEach(uid => { if (timers[uid] == null) timers[uid] = 0; });
+
+    if (fresh.status === 'completed') {
+      clearInterval(timerInterval);
+      await applyMyProgression(); // catch-up path: apply own +5 if we only learned of completion here
+      if (container) renderSessionSummary(container);
+      return;
+    }
+    if (fresh.status === 'lobby') {
+      lastExercise = null;
+      if (container) { lobbyRendered = false; renderLobby(container); }
+      return;
+    }
+
+    // status === 'active'
+    lastExercise = fresh.current_exercise; // keep splash detector in sync
+    const changed = fresh.status !== prevStatus
+      || fresh.current_exercise !== prevExercise
+      || fresh.current_turn_index !== prevIdx
+      || (fresh.turn_order || []).join(',') !== prevOrder
+      || setLogs.length !== prevLogCount;
+    if (changed && container) renderSession(container);
+
+    // Self-correct a wedged/raced turn or a stalled simultaneous exercise.
+    await repairTurnIfNeeded();
+  } catch (e) {
+    if (!(e instanceof TimeoutError)) console.error('[FubzLifts] reconcileSession error:', e);
+    // best-effort — leave local state intact, next tick/resume retries
+  } finally {
+    reconciling = false;
+  }
+}
+
+/** Host-only self-correction so a desynced/raced turn index or a stalled
+ *  simultaneous exercise can't wedge the group. Single-writer (only the session
+ *  admin writes) and idempotent, so it's safe to call from reconcile and the
+ *  realtime handler. Turn-based: if the active slot is invalid or points at a
+ *  lifter who already finished, re-derive the next unfinished lifter and write a
+ *  corrected index (or advance the exercise if everyone is done). Simultaneous:
+ *  if everyone has logged all sets but it never advanced, advance it. */
+async function repairTurnIfNeeded() {
+  if (!activeSession || activeSession.status !== 'active') return;
+  if (getSessionAdmin() !== getUser().id) return; // single writer avoids a write storm
+  const exercise = activeSession.current_exercise;
+  const maxSets = getMaxSets(exercise);
+  const order = activeSession.turn_order || [];
+  if (order.length === 0) return;
+  const doneCount = uid => setLogs.filter(l => l.user_id === uid && l.exercise === exercise).length;
+
+  if (isSimultaneous(exercise)) {
+    if (order.every(uid => doneCount(uid) >= maxSets)) await advanceTurn();
+    return;
+  }
+
+  const idx = activeSession.current_turn_index;
+  const activeUid = order[idx];
+  const invalid = idx == null || idx < 0 || idx >= order.length || activeUid === undefined;
+  const finished = activeUid !== undefined && doneCount(activeUid) >= maxSets;
+  if (!invalid && !finished) return;
+
+  let foundIdx = -1;
+  for (let i = 0; i < order.length; i++) {
+    if (doneCount(order[i]) < maxSets) { foundIdx = i; break; }
+  }
+  if (foundIdx === -1) { await advanceTurn(); return; } // everyone done → move on
+  if (foundIdx === idx) return;
+  try {
+    await withTimeout(
+      supabase.from('sessions').update({ current_turn_index: foundIdx }).eq('id', activeSession.id),
+      8000, 'repair.turn_index'
+    );
+  } catch (e) {
+    if (!(e instanceof TimeoutError)) throw e;
+    window.fubzInvisibleReload?.();
+  }
+}
+
 /** Subscribe to real-time session updates + visibility reconnect */
 function subscribeToSession(container) {
   if (realtimeChannel) supabase.removeChannel(realtimeChannel);
   lobbyContainer = container;
+  hasSubscribedOnce = false;
+
+  // Expose reconcile so app.js (resume/watchdog) can trigger a soft re-sync
+  // without a reload, avoiding a circular import.
+  window.fubzReconcileSession = reconcileSession;
+
+  // Periodic reconciliation backstop — re-pull authoritative state every 25s so
+  // a silently-dead/zombie websocket (which the channel-state checks miss) or a
+  // missed event can't keep the session wedged for more than one tick.
+  clearInterval(reconcileInterval);
+  reconcileInterval = setInterval(() => {
+    if (document.visibilityState === 'visible') reconcileSession();
+  }, 25 * 1000);
 
   setupRealtimeChannel(container);
 }
@@ -606,6 +756,7 @@ function setupRealtimeChannel(container) {
 
       if (activeSession.status === 'completed') {
         clearInterval(timerInterval);
+        await applyMyProgression(); // each client applies its own +5 (RLS-safe)
         renderSessionSummary(container);
       } else if (activeSession.status === 'active' && prevStatus === 'lobby') {
         lobbyRendered = false;
@@ -688,6 +839,12 @@ function setupRealtimeChannel(container) {
       if (status === 'SUBSCRIBED') {
         try { await realtimeChannel.track({ uid: getUser().id }); }
         catch (e) { console.error('[FubzLifts] presence track error:', e); }
+        // On a REsubscribe (the channel dropped and rejoined), postgres_changes
+        // does not replay events missed during the gap — so catch up explicitly
+        // by reconciling authoritative state. Skip the very first subscribe
+        // (session entry already loaded fresh state).
+        if (hasSubscribedOnce) reconcileSession();
+        hasSubscribedOnce = true;
       }
     });
 }
@@ -1004,6 +1161,10 @@ function patchLobby(container, state) {
     }
     // Auto-follow vote unless host usurped (applied when votes change via realtime)
     const winningVote = getWinningVote(allMembers);
+    // A one-shot manual override shouldn't freeze the workout type forever: once
+    // the live vote agrees with the host's choice, re-arm auto-follow so later
+    // vote swings are honoured again.
+    if (hostUsurped && currentType === winningVote) hostUsurped = false;
     if (!hostUsurped && currentType !== winningVote) {
       activeSession.workout_type = winningVote;
       container.querySelectorAll('.admin-set-workout').forEach(btn => {
@@ -1040,7 +1201,6 @@ function setupLobbyDelegation(container) {
   container._lobbyClickHandler = (e) => {
     const target = e.target.closest('button');
     if (!target) return;
-    console.warn('[FubzLifts] Lobby click:', target.id || target.className);
 
     // Vote workout type
     if (target.classList.contains('lobby-vote-workout')) {
@@ -1123,23 +1283,30 @@ function setupLobbyDelegation(container) {
 
     // Admin DL sets
     if (target.classList.contains('admin-set-dl')) {
-      const ls = { ...activeSession.lobby_state, dl_sets: parseInt(target.dataset.sets), last_activity_at: new Date().toISOString() };
-      activeSession.lobby_state = ls;
+      const n = parseInt(target.dataset.sets);
+      activeSession.lobby_state = { ...activeSession.lobby_state, dl_sets: n };
       container.querySelectorAll('.admin-set-dl').forEach(b => {
-        b.classList.toggle('btn-primary', parseInt(b.dataset.sets) === parseInt(target.dataset.sets));
+        b.classList.toggle('btn-primary', parseInt(b.dataset.sets) === n);
       });
-      supabase.from('sessions').update({ lobby_state: ls }).eq('id', activeSession.id);
+      // Merge-safe write so a member readying up can't clobber this host setting.
+      mergeLobbyState((ls) => { ls.dl_sets = n; })
+        .catch(e => { if (!(e instanceof TimeoutError)) console.error('[FubzLifts] dl_sets write failed', e); });
       return;
     }
 
     // Toggle simultaneous mode
     if (target.classList.contains('admin-toggle-sim')) {
       const ex = target.dataset.exercise;
-      const sim = { ...(activeSession.lobby_state?.simultaneous || {}), [ex]: !activeSession.lobby_state?.simultaneous?.[ex] };
-      const ls = { ...activeSession.lobby_state, simultaneous: sim, last_activity_at: new Date().toISOString() };
-      activeSession.lobby_state = ls;
-      target.classList.toggle('btn-primary');
-      supabase.from('sessions').update({ lobby_state: ls }).eq('id', activeSession.id);
+      const newVal = !activeSession.lobby_state?.simultaneous?.[ex];
+      const sim = { ...(activeSession.lobby_state?.simultaneous || {}), [ex]: newVal };
+      activeSession.lobby_state = { ...activeSession.lobby_state, simultaneous: sim };
+      target.classList.toggle('btn-primary', newVal);
+      // Merge-safe write — previously a fire-and-forget whole-blob write that got
+      // clobbered by concurrent member ready/vote writes, so the toggle silently
+      // didn't persist to the started workout. Now it merges against the freshest
+      // lobby_state and is awaited.
+      mergeLobbyState((ls) => { ls.simultaneous = { ...(ls.simultaneous || {}), [ex]: newVal }; })
+        .catch(e => { if (!(e instanceof TimeoutError)) console.error('[FubzLifts] simultaneous toggle write failed', e); });
       return;
     }
 
@@ -1227,36 +1394,88 @@ function setupLobbyDelegation(container) {
   container.addEventListener('input', container._lobbyInputHandler);
 }
 
-/** Update this user's lobby state (vote/ready) — optimistic local update */
+/** Apply a change to the session's lobby_state WITHOUT clobbering concurrent
+ *  edits to other sub-keys. The Supabase JS client replaces the whole JSONB
+ *  column on update, so when one client rebuilt lobby_state from a stale local
+ *  snapshot it would overwrite changes it hadn't yet received — e.g. a member
+ *  readying up wiped the host's just-set Simultaneous-Sets / dl_sets toggle
+ *  (the confirmed "simultaneous didn't persist" bug). mergeLobbyState re-reads
+ *  the freshest row, runs `mutate(ls, fresh)` to apply ONLY the intended change,
+ *  then writes it back — shrinking the clobber window to the tiny read→write gap.
+ *  `mutate` may return sibling columns (e.g. { turn_order, workout_type }) to set
+ *  in the same write. Timeout-guarded; throws TimeoutError so callers can recover. */
+async function mergeLobbyState(mutate) {
+  const sid = activeSession?.id;
+  if (!sid) return;
+  const { data: fresh } = await withTimeout(
+    supabase.from('sessions').select('lobby_state,turn_order,workout_type,status').eq('id', sid).single(),
+    8000, 'lobby.read'
+  );
+  if (!fresh) return;
+  const ls = fresh.lobby_state || { members: {} };
+  if (!ls.members) ls.members = {};
+  const extra = mutate(ls, fresh) || {};
+  ls.last_activity_at = new Date().toISOString();
+  await withTimeout(
+    supabase.from('sessions').update({ lobby_state: ls, ...extra }).eq('id', sid),
+    8000, 'lobby.update'
+  );
+  if (activeSession && activeSession.id === sid) {
+    activeSession.lobby_state = ls;
+    if (extra.turn_order) activeSession.turn_order = extra.turn_order;
+    if (extra.workout_type) activeSession.workout_type = extra.workout_type;
+  }
+}
+
+/** Update this user's lobby state (vote/ready) — optimistic local update, then a
+ *  merge-safe authoritative write (only touches members[me], never clobbers the
+ *  host's simultaneous/dl_sets or other members' votes). */
 async function updateMyLobbyState(updates) {
   const user = getUser();
-  const lobbyState = { ...activeSession.lobby_state };
-  if (!lobbyState.members) lobbyState.members = {};
-  if (!lobbyState.members[user.id]) lobbyState.members[user.id] = {};
-  Object.assign(lobbyState.members[user.id], updates);
-  lobbyState.last_activity_at = new Date().toISOString();
+  // Snapshot pre-optimistic state so we can roll back if the write fails.
+  const prevLobbyState = activeSession.lobby_state;
+  const prevWorkoutType = activeSession.workout_type;
 
   // Optimistic: update local state and patch UI immediately
-  activeSession.lobby_state = lobbyState;
+  const optimistic = { ...activeSession.lobby_state, members: { ...(activeSession.lobby_state?.members || {}) } };
+  optimistic.members[user.id] = { ...(optimistic.members[user.id] || {}), ...updates };
+  activeSession.lobby_state = optimistic;
   if (lobbyContainer) renderLobby(lobbyContainer);
 
-  // If host hasn't usurped, auto-follow the winning vote
-  const dbUpdate = { lobby_state: lobbyState };
+  // If host hasn't usurped, auto-follow the winning vote (optimistic)
+  let newType = null;
   if (!hostUsurped && getSessionAdmin() === user.id && updates.workout_vote) {
-    const allMembers = activeSession.turn_order.map(uid => lobbyState.members?.[uid] || {});
+    const allMembers = activeSession.turn_order.map(uid => optimistic.members?.[uid] || {});
     const winningVote = getWinningVote(allMembers);
-    if (activeSession.workout_type !== winningVote) {
-      dbUpdate.workout_type = winningVote;
+    if (winningVote && activeSession.workout_type !== winningVote) {
+      newType = winningVote;
       activeSession.workout_type = winningVote;
     }
   }
 
-  await supabase.from('sessions').update(dbUpdate).eq('id', activeSession.id);
+  // Authoritative merge-safe write. On a hang, recover via reload; on a normal
+  // error, roll back so the optimistic UI doesn't lie.
+  try {
+    await mergeLobbyState((ls) => {
+      ls.members[user.id] = { ...(ls.members[user.id] || {}), ...updates };
+      return newType ? { workout_type: newType } : {};
+    });
+  } catch (e) {
+    if (e instanceof TimeoutError) {
+      console.warn('[FubzLifts] updateMyLobbyState timed out — forcing recovery reload');
+      toast('Reconnecting…');
+      window.fubzInvisibleReload?.();
+      return;
+    }
+    activeSession.lobby_state = prevLobbyState;
+    activeSession.workout_type = prevWorkoutType;
+    if (lobbyContainer) renderLobby(lobbyContainer);
+    toast('Failed to update — check connection');
+  }
 }
 
 /** Host starts the workout — transition lobby → active */
 async function adminStartSession(container) {
-  console.warn('[FubzLifts] adminStartSession called');
   try {
     const exercises = WORKOUTS[activeSession.workout_type];
 
@@ -1481,42 +1700,75 @@ function updateTimerDisplay() {
   });
 }
 
+// In-flight guard for logSet. The DONE/FAIL handlers are async and the insert
+// can take up to 8s on a slow link; without this flag a fast double-tap (trivial
+// on a phone) re-enters logSet before the first log is in setLogs, producing two
+// rows with the same set_number AND two advanceTurn() calls — duplicate/extra
+// sets and a corrupted turn rotation. The module flag is the load-bearing guard
+// (survives the async boundary regardless of DOM); the button disable in
+// renderSession is just visible feedback.
+let logSetInFlight = false;
+
 /** Log a set (done or fail) */
 async function logSet(success) {
-  const user = getUser();
-  const exercise = activeSession.current_exercise;
-  const weight = memberWeights[user.id]?.[exercise] || 45;
-  const myLogs = setLogs.filter(l => l.user_id === user.id && l.exercise === exercise);
-  const setNumber = myLogs.length + 1;
-
-  let log, error;
+  if (logSetInFlight) return;
+  logSetInFlight = true;
   try {
-    const result = await supabase
-      .from('set_logs')
-      .insert({
-        session_id: activeSession.id,
-        user_id: user.id,
-        exercise,
-        set_number: setNumber,
-        reps: 5,
-        weight_lbs: weight,
-        success,
-      })
-      .select()
-      .single();
-    log = result.data;
-    error = result.error;
-  } catch (e) {
-    toast('Connection lost — tap to retry after reconnecting');
-    return;
+    const user = getUser();
+    const exercise = activeSession.current_exercise;
+    const weight = memberWeights[user.id]?.[exercise] || 45;
+    const myLogs = setLogs.filter(l => l.user_id === user.id && l.exercise === exercise);
+    const setNumber = myLogs.length + 1;
+
+    let log, error;
+    try {
+      // 8s timeout — typical insert is <500ms; if the SDK is hung past this
+      // the websocket/HTTP layer is dead and a reload is the recovery path.
+      const result = await withTimeout(
+        supabase
+          .from('set_logs')
+          .insert({
+            session_id: activeSession.id,
+            user_id: user.id,
+            exercise,
+            set_number: setNumber,
+            reps: 5,
+            weight_lbs: weight,
+            success,
+          })
+          .select()
+          .single(),
+        8000,
+        'set_logs.insert'
+      );
+      log = result.data;
+      error = result.error;
+    } catch (e) {
+      if (e instanceof TimeoutError) {
+        // Hung supabase — the "buttons unresponsive" symptom. Force a reload
+        // to re-establish auth + websocket. Resume state is preserved by the
+        // saveResumeState path in app.js, so the user lands back here mid-set.
+        console.warn('[FubzLifts] logSet timed out — forcing recovery reload');
+        toast('Reconnecting…');
+        window.fubzInvisibleReload?.();
+        return;
+      }
+      toast('Connection lost — tap to retry after reconnecting');
+      return;
+    }
+
+    if (error) { toast('Failed to log set — check connection'); return; }
+
+    if (!setLogs.find(l => l.id === log.id)) setLogs.push(log);
+    timers[user.id] = 0;
+
+    // Reward the press: the cat reacts with a random clip on every advance.
+    triggerCompanion(success ? 'set_done' : 'set_fail');
+
+    await advanceTurn();
+  } finally {
+    logSetInFlight = false;
   }
-
-  if (error) { toast('Failed to log set — check connection'); return; }
-
-  if (!setLogs.find(l => l.id === log.id)) setLogs.push(log);
-  timers[user.id] = 0;
-
-  await advanceTurn();
 }
 
 /** Advance to next turn, next exercise, or end session */
@@ -1535,12 +1787,25 @@ async function advanceTurn() {
     const currentIdx = exercises.indexOf(exercise);
     if (currentIdx < exercises.length - 1) {
       const nextExercise = exercises[currentIdx + 1];
-      // Update DB immediately — realtime handler shows splash for ALL clients
-      await supabase.from('sessions').update({
-        current_exercise: nextExercise,
-        current_turn_index: 0,
-        current_set: 1,
-      }).eq('id', activeSession.id);
+      try {
+        // Update DB immediately — realtime handler shows splash for ALL clients
+        await withTimeout(
+          supabase.from('sessions').update({
+            current_exercise: nextExercise,
+            current_turn_index: 0,
+            current_set: 1,
+          }).eq('id', activeSession.id),
+          8000,
+          'sessions.update next exercise'
+        );
+      } catch (e) {
+        if (e instanceof TimeoutError) {
+          console.warn('[FubzLifts] advanceTurn (exercise) timed out — forcing recovery reload');
+          window.fubzInvisibleReload?.();
+          return;
+        }
+        throw e;
+      }
       activeSession.turn_order.forEach(uid => { timers[uid] = 0; });
     } else {
       await endSession();
@@ -1562,9 +1827,22 @@ async function advanceTurn() {
     attempts++;
   }
 
-  await supabase.from('sessions').update({
-    current_turn_index: nextIdx,
-  }).eq('id', activeSession.id);
+  try {
+    await withTimeout(
+      supabase.from('sessions').update({
+        current_turn_index: nextIdx,
+      }).eq('id', activeSession.id),
+      8000,
+      'sessions.update turn index'
+    );
+  } catch (e) {
+    if (e instanceof TimeoutError) {
+      console.warn('[FubzLifts] advanceTurn (turn) timed out — forcing recovery reload');
+      window.fubzInvisibleReload?.();
+      return;
+    }
+    throw e;
+  }
 }
 
 /** Show congratulatory splash between exercises — retro RPG dialogue style */
@@ -1637,59 +1915,106 @@ function showExerciseSplash(exercise, onDone) {
 
 /** End the session */
 async function endSession() {
-  await supabase.from('sessions').update({
-    status: 'completed',
-    ended_at: new Date().toISOString(),
-  }).eq('id', activeSession.id);
+  // These run off the FINAL set's DONE press. Unwrapped, a hung write here froze
+  // the lifter on their last rep with no recovery (the watchdog sees healthy
+  // auth+channel and won't act). Guard them so a hang triggers a reload instead.
+  try {
+    await withTimeout(
+      supabase.from('sessions').update({
+        status: 'completed',
+        ended_at: new Date().toISOString(),
+      }).eq('id', activeSession.id),
+      8000,
+      'sessions.update completed'
+    );
 
-  // Toggle next workout for the group
-  const nextWorkout = activeSession.workout_type === 'A' ? 'B' : 'A';
-  await supabase.from('groups').update({ next_workout: nextWorkout }).eq('id', activeSession.group_id);
+    // Toggle next workout for the group
+    const nextWorkout = activeSession.workout_type === 'A' ? 'B' : 'A';
+    await withTimeout(
+      supabase.from('groups').update({ next_workout: nextWorkout }).eq('id', activeSession.group_id),
+      8000,
+      'groups.update next_workout'
+    );
+  } catch (e) {
+    if (e instanceof TimeoutError) {
+      console.warn('[FubzLifts] endSession timed out — forcing recovery reload');
+      window.fubzInvisibleReload?.();
+      return;
+    }
+    throw e;
+  }
 
-  await processProgression();
+  // Apply MY progression (each client does its own — see applyMyProgression).
+  await applyMyProgression();
 
-  // Show summary locally (other clients get it via realtime)
+  // Show summary locally (other clients get it via realtime, and apply their
+  // own progression in that handler).
   const container = document.getElementById('sessionView');
   clearInterval(timerInterval);
   renderSessionSummary(container);
 }
 
-/** Process weight progression after session ends */
-async function processProgression() {
-  const exercises = WORKOUTS[activeSession.workout_type];
+// Guard: apply this client's progression at most once per completed session.
+// Reset in cleanupSession so a fresh session can progress again.
+let progressionDone = false;
 
-  for (const uid of activeSession.turn_order) {
+/** Apply weight progression for the CURRENT USER ONLY when the session completes.
+ *  CRITICAL: RLS only lets a user update their OWN profile_weights, so the old
+ *  approach (the finisher looping turn_order and updating everyone) silently
+ *  failed for every member except whoever pressed the last set — they never
+ *  progressed. Now each client applies its own +5 on completion: the finisher
+ *  from endSession, every other client from the 'completed' realtime/reconcile
+ *  branch. Re-fetches MY set_logs from the DB (authoritative — avoids a missed
+ *  realtime INSERT making a completed exercise look incomplete). Idempotent via
+ *  progressionDone so the finisher's direct call + its own echo don't double-add. */
+async function applyMyProgression() {
+  const user = getUser();
+  if (!user || !activeSession || progressionDone) return;
+  progressionDone = true;
+  const sid = activeSession.id;
+  const startedAt = activeSession.started_at;
+  const exercises = WORKOUTS[activeSession.workout_type] || [];
+  try {
+    const { data: myLogs } = await withTimeout(
+      supabase.from('set_logs').select('exercise,success')
+        .eq('session_id', sid).eq('user_id', user.id).gte('logged_at', startedAt),
+      6000, 'progression.myLogs'
+    );
     for (const exercise of exercises) {
       const maxSets = getMaxSets(exercise);
-      const userLogs = setLogs.filter(l => l.user_id === uid && l.exercise === exercise);
-      const allSuccess = userLogs.length >= maxSets && userLogs.every(l => l.success);
-      const anyFail = userLogs.some(l => !l.success);
-
-      const { data: weightRow } = await supabase
-        .from('profile_weights')
-        .select('*')
-        .eq('user_id', uid)
-        .eq('exercise', exercise)
-        .single();
-
-      if (!weightRow) continue;
-
-      if (allSuccess) {
-        await supabase.from('profile_weights').update({
-          weight_lbs: weightRow.weight_lbs + 5,
-        }).eq('user_id', uid).eq('exercise', exercise);
-      }
-      // Update local cache so summary shows new weight
-      if (allSuccess && memberWeights[uid]) {
-        memberWeights[uid][exercise] = weightRow.weight_lbs + 5;
+      const logs = (myLogs || []).filter(l => l.exercise === exercise);
+      const allSuccess = logs.length >= maxSets && logs.every(l => l.success);
+      if (!allSuccess) continue; // only fully-successful exercises progress
+      try {
+        const { data: wr } = await withTimeout(
+          supabase.from('profile_weights').select('weight_lbs')
+            .eq('user_id', user.id).eq('exercise', exercise).single(),
+          6000, 'progression.select'
+        );
+        if (!wr) continue;
+        await withTimeout(
+          supabase.from('profile_weights').update({ weight_lbs: wr.weight_lbs + 5 })
+            .eq('user_id', user.id).eq('exercise', exercise),
+          6000, 'progression.update'
+        );
+        if (memberWeights[user.id]) memberWeights[user.id][exercise] = wr.weight_lbs + 5;
+      } catch (e) {
+        if (e instanceof TimeoutError) { console.warn('[FubzLifts] progression timed out for', exercise); continue; }
+        throw e;
       }
     }
+  } catch (e) {
+    if (!(e instanceof TimeoutError)) console.error('[FubzLifts] applyMyProgression error:', e);
+    // best-effort: never block the summary on progression
   }
 }
 
 /** Render the active session */
 function renderSession(container) {
   if (!activeSession || activeSession.status !== 'active') return;
+
+  // Reveal the cat companion while a workout is live (idempotent).
+  mountCompanion();
 
   // Sync the paw vote indicator with the latest session state on every render.
   updatePawVoteUI();
@@ -1700,8 +2025,17 @@ function renderSession(container) {
   const maxSets = getMaxSets(exercise);
   const exercises = WORKOUTS[activeSession.workout_type];
   const simultaneous = isSimultaneous(exercise);
+  // Clamp the turn index into range. A kick/leave racing an advanceTurn can leave
+  // current_turn_index pointing past the (now shorter) turn_order in the DB; without
+  // this every client would compute activeTurnUserId=undefined → nobody is "your
+  // turn" → all DONE/FAIL buttons vanish and the session hard-wedges. The clamp is
+  // deterministic (same idx+length on every client) so everyone still agrees on who
+  // is active; repairTurnIfNeeded() then writes the corrected index authoritatively.
+  const order = activeSession.turn_order || [];
+  const rawIdx = activeSession.current_turn_index || 0;
+  const safeIdx = order.length ? ((rawIdx % order.length) + order.length) % order.length : 0;
   // In simultaneous mode, show your own weight/progress; in turn mode, show active person's
-  const activeTurnUserId = simultaneous ? user.id : activeSession.turn_order[activeSession.current_turn_index];
+  const activeTurnUserId = simultaneous ? user.id : order[safeIdx];
   const isMyTurn = simultaneous || activeTurnUserId === user.id;
   const activeAlias = sessionMembers.find(m => m.id === activeTurnUserId)?.alias || 'Unknown';
   const weight = memberWeights[activeTurnUserId]?.[exercise] || 45;
@@ -1743,16 +2077,20 @@ function renderSession(container) {
       <div class="paw-pips-inline" id="pawPipsInline" ${pipsHTML ? '' : 'hidden'}>${pipsHTML}</div>
     </div>
 
-    <div class="turn-indicator ${(isMyTurn && !mySetsDone) ? 'your-turn pulsing' : ''}">
-      ${simultaneous
-        ? (mySetsDone ? '⏳ Waiting for others...' : '🏋️ EVERYONE LIFTS')
-        : (isMyTurn
-          ? '🏋️ YOUR TURN'
-          : `Waiting for <span class="name">${esc(activeAlias)}</span>`)}
-    </div>
-
-    <div class="weight-display">
-      ${weight} <span class="weight-unit">lbs</span>
+    <div class="companion-turn-row" style="display:flex;align-items:center;justify-content:center;gap:18px;margin:8px 0">
+      <div id="fubzCompanionSlot" style="width:128px;height:128px;flex:none"></div>
+      <div>
+        <div class="turn-indicator ${(isMyTurn && !mySetsDone) ? 'your-turn pulsing' : ''}" style="margin:0 0 6px">
+          ${simultaneous
+            ? (mySetsDone ? '⏳ Waiting for others...' : '🏋️ EVERYONE LIFTS')
+            : (isMyTurn
+              ? '🏋️ YOUR TURN'
+              : `Waiting for <span class="name">${esc(activeAlias)}</span>`)}
+        </div>
+        <div class="weight-display" style="margin:0">
+          ${weight} <span class="weight-unit">lbs</span>
+        </div>
+      </div>
     </div>
 
     <div class="set-dots">
@@ -1908,8 +2246,14 @@ function renderSession(container) {
   `;
 
   if (isMyTurn && !mySetsDone) {
-    container.querySelector('#doneBtn')?.addEventListener('click', () => logSet(true));
-    container.querySelector('#failBtn')?.addEventListener('click', () => logSet(false));
+    const doneBtn = container.querySelector('#doneBtn');
+    const failBtn = container.querySelector('#failBtn');
+    // Disable BOTH synchronously on tap so the button visibly reflects the
+    // in-flight state; the logSetInFlight flag is the real double-tap guard.
+    // Buttons are naturally re-enabled by the next renderSession innerHTML rebuild.
+    const lockButtons = () => { if (doneBtn) doneBtn.disabled = true; if (failBtn) failBtn.disabled = true; };
+    doneBtn?.addEventListener('click', () => { lockButtons(); logSet(true); });
+    failBtn?.addEventListener('click', () => { lockButtons(); logSet(false); });
   }
 
   // End / Leave session — host has both options (End for everyone OR just
@@ -2016,6 +2360,12 @@ function renderSession(container) {
 
 /** Render session summary after completion */
 function renderSessionSummary(container) {
+  // Retire the cat before the celebration screen — it lives on document.body and
+  // would otherwise survive the container swap and float over the summary. This
+  // one spot covers all three completion paths (endSession / realtime / reconcile);
+  // cleanupSession() stays the catch-all for leave/navigate.
+  unmountCompanion();
+
   const exercises = WORKOUTS[activeSession.workout_type];
   const nextWorkout = activeSession.workout_type === 'A' ? 'B' : 'A';
 
@@ -2105,7 +2455,13 @@ function renderSessionSummary(container) {
 
 /** Cleanup when leaving session view */
 export function cleanupSession() {
+  unmountCompanion();
   clearInterval(timerInterval);
+  clearInterval(reconcileInterval);
+  reconcileInterval = null;
+  reconciling = false;
+  hasSubscribedOnce = false;
+  progressionDone = false;
   if (realtimeChannel) supabase.removeChannel(realtimeChannel);
   // Remove delegated click + input handlers
   if (lobbyContainer && lobbyContainer._lobbyClickHandler) {

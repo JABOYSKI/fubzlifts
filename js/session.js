@@ -857,6 +857,12 @@ let lobbyRendered = false; // track if lobby skeleton is already in DOM
 function renderLobby(container) {
   if (!activeSession || activeSession.status !== 'lobby') return;
 
+  // The cat only belongs in an ACTIVE workout. Retire it here so it can't linger
+  // over the lobby — covers the "host ended the workout early" active→lobby path
+  // (realtime + reconcile) where we re-render the lobby without going through
+  // cleanupSession(). Idempotent; no-op if the cat isn't mounted.
+  unmountCompanion();
+
   const user = getUser();
   const lobbyState = activeSession.lobby_state || { members: {} };
   const adminId = getSessionAdmin();

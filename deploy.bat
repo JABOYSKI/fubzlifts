@@ -1,37 +1,29 @@
 @echo off
-:: FubzLifts deploy — stamps version and pushes to GitHub Pages
+:: FubzLifts deploy - stamps build files and pushes to GitHub Pages.
 
-:: Generate ISO timestamp
+:: ISO-8601 UTC timestamp for this deploy.
 for /f "tokens=*" %%i in ('powershell -NoProfile -Command "[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')"') do set TIMESTAMP=%%i
 
-:: Update version.js
-echo // Auto-updated on deploy — do not edit manually> js\version.js
-echo export const BUILD_TIME = '%TIMESTAMP%';>> js\version.js
+:: Stamp version.js, sw.js and index.html (?v= cache-bust + inline build time).
+:: Delegated to a real .ps1 so the regex stamps are reliable -- the old inline
+:: cmd-escaped version silently stopped stamping index.html and the splash date
+:: froze. The script verifies its own work and exits non-zero on failure.
+powershell -NoProfile -ExecutionPolicy Bypass -File "tools\stamp-build.ps1" -Timestamp "%TIMESTAMP%"
+if errorlevel 1 (
+  echo.
+  echo Build stamping FAILED - aborting deploy. Nothing was committed or pushed.
+  pause
+  exit /b 1
+)
 
-:: Stamp SW cache name so browser detects new worker on deploy.
-:: Replaces the entire single-quoted value: 'fubzlifts-...' -> 'fubzlifts-<timestamp>'
-:: We pass TIMESTAMP via env var to dodge cmd's quoting rules around the regex.
-set FUBZ_TS=%TIMESTAMP%
-powershell -NoProfile -Command "$ts = $env:FUBZ_TS; $sw = Get-Content 'sw.js' -Raw; $sw = [regex]::Replace($sw, \"'fubzlifts-[^']*'\", \"'fubzlifts-$ts'\"); Set-Content -Path 'sw.js' -Value $sw -NoNewline -Encoding UTF8"
-
-:: Stamp BUILD_TIMESTAMP placeholders in index.html — these are the actual
-:: cache-bust mechanism. The browser's HTTP cache keys by URL; with a fresh
-:: timestamp per deploy, the URL changes and the browser must refetch. The
-:: regexes also accept a previous timestamp so re-runs of deploy.bat work.
-::   - ?v=... on script/link tags (forces fresh CSS/JS fetch)
-::   - window.FUBZ_BUILD_TIME = '...' (the splash's "updated" timestamp)
-powershell -NoProfile -Command "$ts = $env:FUBZ_TS; $h = Get-Content 'index.html' -Raw; $h = [regex]::Replace($h, '\?v=[^\"''\s>]*', \"?v=$ts\"); $h = [regex]::Replace($h, \"window\.FUBZ_BUILD_TIME = '[^']*'\", \"window.FUBZ_BUILD_TIME = '$ts'\"); Set-Content -Path 'index.html' -Value $h -NoNewline -Encoding UTF8"
-set FUBZ_TS=
-
-:: Stage, commit, push.
-:: v2 deploys to the 'v2' branch on the same repo as v1.1. v1.1 stays on
-:: 'master' untouched, so rollback is just toggling the GitHub Pages source
-:: branch in repo Settings — no force-push, no destructive ops.
+:: Stage, commit, push. v2 deploys to the 'v2' branch on the same repo as v1.1;
+:: v1.1 stays on 'master' untouched, so rollback is just toggling the GitHub Pages
+:: source branch in repo Settings - no force-push, no destructive ops.
 git add -A
 git commit -m "deploy v2: %TIMESTAMP%"
 git push origin master:v2
 
 echo.
 echo Deployed v2! BUILD_TIME = %TIMESTAMP%
-echo Live at jaboyski.github.io/fubzlifts once GitHub Pages source is set to 'v2'.
+echo Live at jaboyski.github.io/fubzlifts (GitHub Pages source = 'v2').
 pause
